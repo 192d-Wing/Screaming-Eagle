@@ -23,6 +23,7 @@ use crate::config::Config;
 use crate::error::{CdnError, CdnResult};
 use crate::metrics::Metrics;
 use crate::origin::OriginFetcher;
+use crate::range::{extract_range, parse_range_header, ByteRange, RangeParseResult};
 use crate::rate_limit::{RateLimitResult, RateLimiter};
 
 pub struct AppState {
@@ -217,7 +218,7 @@ pub async fn cdn_handler(
         .map(|v| v.contains("no-cache") || v.contains("no-store"))
         .unwrap_or(false);
 
-    let cache_status;
+    let mut cache_status;
     let response_body;
     let response_headers;
     let response_status;
@@ -292,31 +293,71 @@ pub async fn cdn_handler(
                 cache_status = CacheStatus::Miss;
                 match fetch_from_origin_with_circuit_breaker(&state, &origin, &path, query_string.as_deref(), &headers).await {
                     Ok(origin_response) => {
-                        response_body = origin_response.0.clone();
-                        response_headers = origin_response.1.clone();
-                        response_status = origin_response.2;
+                        // Check if origin returned 5xx error - try stale-if-error
+                        if origin_response.2.is_server_error() {
+                            // RFC 5861: Try to serve stale content on 5xx errors
+                            if let Some(stale_entry) = state.cache.get_stale_for_error(&cache_key) {
+                                cache_status = CacheStatus::StaleIfError;
+                                cache_age_secs = Some(stale_entry.created_at.elapsed().as_secs());
+                                response_body = stale_entry.body;
+                                response_headers = stale_entry.headers;
+                                response_status = StatusCode::from_u16(stale_entry.status_code).unwrap_or(StatusCode::OK);
+                                tracing::info!(
+                                    origin = %origin,
+                                    path = %path,
+                                    origin_status = %origin_response.2,
+                                    "Serving stale content due to origin 5xx error (stale-if-error)"
+                                );
+                            } else {
+                                // No stale content available, return the 5xx response
+                                response_body = origin_response.0.clone();
+                                response_headers = origin_response.1.clone();
+                                response_status = origin_response.2;
+                            }
+                        } else {
+                            response_body = origin_response.0.clone();
+                            response_headers = origin_response.1.clone();
+                            response_status = origin_response.2;
 
-                        // Store in cache if cacheable
-                        if is_cacheable(response_status, &response_headers) {
-                            // Generate cache key with actual Vary header from response (RFC 9111)
-                            let vary_header = response_headers.get("vary").map(|s| s.as_str());
-                            let final_cache_key = generate_cache_key_with_vary(
-                                &origin,
-                                &format!("/{}", path),
-                                query_string.as_deref(),
-                                vary_header.or(Some("accept-encoding")),
-                                &request_headers_map,
-                            );
-                            store_in_cache(
-                                &state,
-                                &final_cache_key,
-                                origin_response.0,
-                                origin_response.1,
-                                response_status,
-                            );
+                            // Store in cache if cacheable
+                            if is_cacheable(response_status, &response_headers) {
+                                // Generate cache key with actual Vary header from response (RFC 9111)
+                                let vary_header = response_headers.get("vary").map(|s| s.as_str());
+                                let final_cache_key = generate_cache_key_with_vary(
+                                    &origin,
+                                    &format!("/{}", path),
+                                    query_string.as_deref(),
+                                    vary_header.or(Some("accept-encoding")),
+                                    &request_headers_map,
+                                );
+                                store_in_cache(
+                                    &state,
+                                    &final_cache_key,
+                                    origin_response.0,
+                                    origin_response.1,
+                                    response_status,
+                                );
+                            }
                         }
                     }
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        // RFC 5861: Try stale-if-error on connection/fetch errors too
+                        if let Some(stale_entry) = state.cache.get_stale_for_error(&cache_key) {
+                            cache_status = CacheStatus::StaleIfError;
+                            cache_age_secs = Some(stale_entry.created_at.elapsed().as_secs());
+                            response_body = stale_entry.body;
+                            response_headers = stale_entry.headers;
+                            response_status = StatusCode::from_u16(stale_entry.status_code).unwrap_or(StatusCode::OK);
+                            tracing::info!(
+                                origin = %origin,
+                                path = %path,
+                                error = %e,
+                                "Serving stale content due to origin error (stale-if-error)"
+                            );
+                        } else {
+                            return Err(e);
+                        }
+                    }
                 }
             }
         }
@@ -328,6 +369,30 @@ pub async fn cdn_handler(
         .metrics
         .record_request(&origin, cache_status, response_status, duration);
 
+    // RFC 9110 Section 14: Handle Range requests
+    // Only process Range header for successful responses and GET requests
+    let range_request: Option<ByteRange> = if !is_head_request && response_status.is_success() {
+        if let Some(range_header) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
+            let content_length = response_body.len() as u64;
+            match parse_range_header(range_header, content_length) {
+                RangeParseResult::Single(range) => Some(range),
+                RangeParseResult::Multiple(_) => {
+                    // Multi-range not supported, serve full content
+                    None
+                }
+                RangeParseResult::Invalid => {
+                    // Return 416 Range Not Satisfiable
+                    return build_range_not_satisfiable_response(content_length);
+                }
+                RangeParseResult::None => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Build response with RFC-compliant headers
     build_response(
         response_body,
@@ -336,6 +401,7 @@ pub async fn cdn_handler(
         cache_status,
         cache_age_secs,
         is_head_request,
+        range_request.as_ref(),
     )
 }
 
@@ -435,13 +501,14 @@ fn store_in_cache(
 ) {
     let config = &state.config.cache;
 
+    // Parse Cache-Control directives
+    let directives = headers
+        .get("cache-control")
+        .map(|cc| parse_cache_control(cc))
+        .unwrap_or_default();
+
     // Determine TTL
-    let ttl = if let Some(cc) = headers.get("cache-control") {
-        let directives = parse_cache_control(cc);
-        directives.ttl(config.default_ttl(), config.max_ttl())
-    } else {
-        config.default_ttl()
-    };
+    let ttl = directives.ttl(config.default_ttl(), config.max_ttl());
 
     let now = Instant::now();
 
@@ -461,6 +528,7 @@ fn store_in_cache(
         last_modified: headers.get("last-modified").cloned(),
         created_at: now,
         expires_at: now + ttl,
+        stale_if_error_secs: directives.stale_if_error,
     };
 
     state.cache.set(cache_key.to_string(), entry);
@@ -473,11 +541,28 @@ fn build_response(
     cache_status: CacheStatus,
     cache_age_secs: Option<u64>,
     is_head_request: bool,
+    range_request: Option<&ByteRange>,
 ) -> CdnResult<Response> {
-    let mut response = Response::builder().status(status);
+    let content_length = body.len() as u64;
+
+    // Determine if we're serving a range response
+    let (final_status, final_body, content_range) = if let Some(range) = range_request {
+        // Serve partial content (206)
+        let range_body = extract_range(&body, range);
+        let content_range = range.content_range_header(content_length);
+        (StatusCode::PARTIAL_CONTENT, range_body, Some(content_range))
+    } else {
+        (status, body, None)
+    };
+
+    let mut response = Response::builder().status(final_status);
 
     // Add headers from origin/cache
     for (key, value) in &headers {
+        // Skip Content-Length for range responses - we'll set it correctly
+        if range_request.is_some() && key.to_lowercase() == "content-length" {
+            continue;
+        }
         if let Ok(header_value) = HeaderValue::from_str(value) {
             response = response.header(key.as_str(), header_value);
         }
@@ -492,27 +577,51 @@ fn build_response(
     response = response.header(header::DATE, date);
 
     // RFC 9110: Via header - identifies intermediate proxies
-    response = response.header(header::VIA, format!("1.1 screaming-eagle"));
+    response = response.header(header::VIA, "1.1 screaming-eagle");
 
     // RFC 9111: Age header - indicates time in cache (only for cached responses)
     if let Some(age) = cache_age_secs {
         response = response.header(header::AGE, age.to_string());
     }
 
-    // RFC 9110: Accept-Ranges header - indicate we don't support range requests yet
-    if !headers.contains_key("accept-ranges") {
-        response = response.header(header::ACCEPT_RANGES, "none");
+    // RFC 9110: Accept-Ranges header - indicate we support byte ranges
+    response = response.header(header::ACCEPT_RANGES, "bytes");
+
+    // RFC 9110: Content-Range header for partial responses
+    if let Some(cr) = content_range {
+        response = response.header(header::CONTENT_RANGE, cr);
+        // Set correct Content-Length for the partial response
+        response = response.header(header::CONTENT_LENGTH, final_body.len().to_string());
     }
 
     // For HEAD requests, return empty body but keep Content-Length from original
-    let body = if is_head_request {
+    let response_body = if is_head_request {
         Body::empty()
     } else {
-        Body::from(body)
+        Body::from(final_body)
     };
 
     response
-        .body(body)
+        .body(response_body)
+        .map_err(|e| CdnError::Internal(format!("Failed to build response: {}", e)))
+}
+
+/// Build a 416 Range Not Satisfiable response
+fn build_range_not_satisfiable_response(content_length: u64) -> CdnResult<Response> {
+    let mut response = Response::builder().status(StatusCode::RANGE_NOT_SATISFIABLE);
+
+    // RFC 9110: Content-Range header with unsatisfied-range
+    response = response.header(header::CONTENT_RANGE, format!("bytes */{}", content_length));
+
+    // Add standard headers
+    let date = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+    response = response.header(header::DATE, date);
+    response = response.header(header::VIA, "1.1 screaming-eagle");
+    response = response.header("X-CDN", "Screaming-Eagle");
+    response = response.header(header::ACCEPT_RANGES, "bytes");
+
+    response
+        .body(Body::empty())
         .map_err(|e| CdnError::Internal(format!("Failed to build response: {}", e)))
 }
 

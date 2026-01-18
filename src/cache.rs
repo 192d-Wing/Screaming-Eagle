@@ -19,6 +19,8 @@ pub struct CacheEntry {
     pub created_at: Instant,
     pub expires_at: Instant,
     pub size: usize,
+    /// stale-if-error window in seconds (RFC 5861)
+    pub stale_if_error_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +38,7 @@ pub enum CacheStatus {
     Hit,
     Miss,
     Stale,
+    StaleIfError,
     Bypass,
 }
 
@@ -45,6 +48,7 @@ impl CacheStatus {
             CacheStatus::Hit => "HIT",
             CacheStatus::Miss => "MISS",
             CacheStatus::Stale => "STALE",
+            CacheStatus::StaleIfError => "STALE-IF-ERROR",
             CacheStatus::Bypass => "BYPASS",
         }
     }
@@ -93,6 +97,32 @@ impl Cache {
 
         self.misses.fetch_add(1, Ordering::Relaxed);
         debug!(key = %key, "Cache MISS");
+        None
+    }
+
+    /// Get a stale entry for stale-if-error handling (RFC 5861)
+    /// Returns the entry if it's within the stale-if-error window
+    pub fn get_stale_for_error(&self, key: &str) -> Option<CacheEntry> {
+        if let Some(entry) = self.entries.get(key) {
+            let now = Instant::now();
+
+            // Check if within stale-if-error window
+            if let Some(stale_if_error_secs) = entry.stale_if_error_secs {
+                let stale_if_error_window = Duration::from_secs(stale_if_error_secs);
+                if now < entry.expires_at + stale_if_error_window {
+                    debug!(key = %key, "Cache STALE-IF-ERROR (within error window)");
+                    return Some(entry.clone());
+                }
+            }
+
+            // Also check the configured stale_while_revalidate as fallback for errors
+            let stale_window = Duration::from_secs(self.config.stale_while_revalidate_secs);
+            if now < entry.expires_at + stale_window {
+                debug!(key = %key, "Cache STALE-IF-ERROR (within revalidate window)");
+                return Some(entry.clone());
+            }
+        }
+
         None
     }
 
@@ -340,6 +370,10 @@ pub fn parse_cache_control(header: &str) -> CacheControlDirectives {
             if let Ok(secs) = value.parse() {
                 directives.stale_while_revalidate = Some(secs);
             }
+        } else if let Some(value) = part.strip_prefix("stale-if-error=") {
+            if let Ok(secs) = value.parse() {
+                directives.stale_if_error = Some(secs);
+            }
         }
     }
 
@@ -356,6 +390,7 @@ pub struct CacheControlDirectives {
     pub max_age: Option<u64>,
     pub s_maxage: Option<u64>,
     pub stale_while_revalidate: Option<u64>,
+    pub stale_if_error: Option<u64>,
 }
 
 impl CacheControlDirectives {

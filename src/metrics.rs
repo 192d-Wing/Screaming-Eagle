@@ -99,7 +99,7 @@ impl Metrics {
             .observe(duration.as_secs_f64());
 
         match cache_status {
-            CacheStatus::Hit | CacheStatus::Stale => {
+            CacheStatus::Hit | CacheStatus::Stale | CacheStatus::StaleIfError => {
                 self.cache_hits.with_label_values(&[origin]).inc();
             }
             CacheStatus::Miss | CacheStatus::Bypass => {

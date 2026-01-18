@@ -94,23 +94,24 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 
 | Requirement | Status | Implementation |
 |-------------|--------|----------------|
-| Range header parsing | NOT IMPLEMENTED | All requests return full content |
-| Accept-Ranges header | NOT IMPLEMENTED | Should indicate bytes or none |
-| Content-Range header | NOT IMPLEMENTED | Required for 206 responses |
-| 206 Partial Content status | NOT IMPLEMENTED | Not supported |
-| 416 Range Not Satisfiable | NOT IMPLEMENTED | Not supported |
+| Range header parsing | COMPLIANT | Parsed via `parse_range_header()` in range module |
+| Accept-Ranges header | COMPLIANT | Returns `bytes` on all responses |
+| Content-Range header | COMPLIANT | Included in 206 responses |
+| 206 Partial Content status | COMPLIANT | Returned for valid range requests |
+| 416 Range Not Satisfiable | COMPLIANT | Returned for invalid/unsatisfiable ranges |
 
-**Gap:** Range requests are essential for large file delivery and video streaming.
+**Note:** Single byte ranges fully supported. Multi-range requests (multipart) serve full content.
 
 ### Section 15 - Status Codes
 
 | Status Code | Status | Usage |
 |-------------|--------|-------|
 | 200 OK | COMPLIANT | Successful responses |
-| 206 Partial Content | NOT IMPLEMENTED | Range requests |
+| 206 Partial Content | COMPLIANT | Range request responses |
 | 304 Not Modified | COMPLIANT | Conditional request validation |
 | 400 Bad Request | COMPLIANT | Invalid requests |
 | 404 Not Found | COMPLIANT | Unknown origin/path |
+| 416 Range Not Satisfiable | COMPLIANT | Invalid range requests |
 | 429 Too Many Requests | COMPLIANT | Rate limiting |
 | 500 Internal Server Error | COMPLIANT | Server errors |
 | 502 Bad Gateway | COMPLIANT | Origin errors |
@@ -165,8 +166,8 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 
 | Requirement | Status | Implementation |
 |-------------|--------|----------------|
-| Serve stale on origin failure | PARTIAL | Only with stale-while-revalidate |
-| stale-if-error handling | NOT IMPLEMENTED | RFC 5861 extension |
+| Serve stale on origin failure | COMPLIANT | Via stale-while-revalidate and stale-if-error |
+| stale-if-error handling | COMPLIANT | Serves stale on 5xx and connection errors (RFC 5861) |
 
 ---
 
@@ -175,9 +176,9 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 | Directive | Status | Implementation |
 |-----------|--------|----------------|
 | stale-while-revalidate | COMPLIANT | Background revalidation during stale window |
-| stale-if-error | NOT IMPLEMENTED | Should serve stale on 5xx errors |
+| stale-if-error | COMPLIANT | Serves stale content on 5xx errors and connection failures |
 
-**Gap:** stale-if-error is valuable for resilience during origin failures.
+**Note:** stale-if-error window parsed from Cache-Control and stored with cache entries.
 
 ---
 
@@ -219,14 +220,15 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 - **Date header** (RFC 9110 Section 10)
 - **Via header** (RFC 9110 Section 10)
 - **Vary-based cache keying** (RFC 9111)
+- **Range requests** (RFC 9110 Section 14) - 206 Partial Content, 416 Range Not Satisfiable
+- **stale-if-error** (RFC 5861) - Serves stale on 5xx and connection errors
 
 ### Partially Compliant
 - must-revalidate (parsed but not strictly enforced)
 - Status code caching (only 200 range)
+- Multi-range requests (serves full content instead of multipart)
 
 ### Not Implemented
-- Range requests (RFC 9110 Section 14)
-- stale-if-error
 - Forwarded header (RFC 7239)
 - no-transform directive
 
@@ -236,11 +238,11 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 
 ### High Priority (Essential for CDN)
 
-1. **Range Requests (RFC 9110 Section 14)**
-   - Required for video streaming, large file downloads
-   - Implement Range header parsing
-   - Add Accept-Ranges: bytes header
-   - Return 206 Partial Content with Content-Range
+1. ~~**Range Requests (RFC 9110 Section 14)**~~ ✅ IMPLEMENTED
+   - ~~Required for video streaming, large file downloads~~
+   - ~~Implement Range header parsing~~
+   - ~~Add Accept-Ranges: bytes header~~
+   - ~~Return 206 Partial Content with Content-Range~~
 
 2. ~~**Age Header (RFC 9111)**~~ ✅ IMPLEMENTED
    - ~~Add Age header indicating time in cache~~
@@ -264,9 +266,9 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
    - ~~Add Via: 1.1 screaming-eagle~~
    - ~~Identify proxy in request chain~~
 
-7. **stale-if-error**
-   - Serve stale content on 5xx origin errors
-   - Improve availability during outages
+7. ~~**stale-if-error**~~ ✅ IMPLEMENTED
+   - ~~Serve stale content on 5xx origin errors~~
+   - ~~Improve availability during outages~~
 
 ### Low Priority (Full Compliance)
 
@@ -279,20 +281,24 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 10. **Forwarded Header (RFC 7239)**
     - Parse and generate standard Forwarded header
 
+11. **Multi-range Requests**
+    - Return multipart/byteranges for multiple ranges
+
 ---
 
 ## Implementation Checklist
 
-- [ ] Add Range request support
+- [x] Add Range request support (206, 416, Content-Range)
 - [x] Implement HEAD method
 - [x] Add Age header to cached responses
 - [x] Add Date header to all responses
 - [x] Add Via header
 - [x] Implement Vary-based cache keying
-- [x] Add Accept-Ranges header (currently returns `none`)
-- [ ] Add stale-if-error support
+- [x] Add Accept-Ranges header (returns `bytes`)
+- [x] Add stale-if-error support
 - [ ] Enforce must-revalidate strictly
 - [ ] Parse Forwarded header
+- [ ] Implement multi-range (multipart) responses
 
 ---
 
@@ -302,3 +308,4 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 |---------|------|---------|
 | 1.0 | 2026-01-18 | Initial compliance assessment |
 | 1.1 | 2026-01-18 | Implemented HEAD method, Age/Date/Via headers, Vary-based cache keying |
+| 1.2 | 2026-01-18 | Implemented Range requests (206, 416), stale-if-error (RFC 5861) |

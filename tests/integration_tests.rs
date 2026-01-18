@@ -27,6 +27,7 @@ fn test_cache_operations() {
         created_at: now,
         expires_at: now + Duration::from_secs(3600),
         size: body.len(),
+        stale_if_error_secs: Some(300),
     };
 
     // Store the entry
@@ -67,6 +68,7 @@ fn test_cache_invalidation() {
         created_at: now,
         expires_at: now + Duration::from_secs(3600),
         size: 9,
+        stale_if_error_secs: None,
     };
 
     cache.set("key1".to_string(), entry.clone());
@@ -205,6 +207,12 @@ fn test_cache_control_parsing() {
     let directives = parse_cache_control("s-maxage=300, max-age=600");
     assert_eq!(directives.s_maxage, Some(300));
     assert_eq!(directives.max_age, Some(600));
+
+    // Test stale-while-revalidate and stale-if-error (RFC 5861)
+    let directives = parse_cache_control("max-age=300, stale-while-revalidate=60, stale-if-error=86400");
+    assert_eq!(directives.max_age, Some(300));
+    assert_eq!(directives.stale_while_revalidate, Some(60));
+    assert_eq!(directives.stale_if_error, Some(86400));
 }
 
 /// Test cache key generation

@@ -7,4 +7,5 @@ pub mod error;
 pub mod handlers;
 pub mod metrics;
 pub mod origin;
+pub mod range;
 pub mod rate_limit;
