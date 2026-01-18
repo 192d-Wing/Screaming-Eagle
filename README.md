@@ -1,24 +1,40 @@
 # Screaming Eagle CDN
 
-A high-performance Content Delivery Network written in Rust.
+A high-performance, RFC-compliant Content Delivery Network written in Rust.
 
 ## Features
 
+### Core CDN
 - **High Performance**: Built with Tokio and Axum for async I/O and minimal latency
 - **In-Memory Caching**: Fast LRU-style cache with configurable size limits
 - **Multiple Origins**: Support for multiple origin servers with per-origin configuration
 - **Cache Control**: Respects Cache-Control headers (max-age, s-maxage, no-cache, no-store)
-- **Stale-While-Revalidate**: Serves stale content while refreshing in the background
 - **ETag Generation**: Automatic ETag generation using xxHash for efficient validation
-- **Rate Limiting**: Token bucket rate limiting per client IP
-- **Circuit Breaker**: Automatic origin failure detection and recovery
-- **TLS/HTTPS**: Native TLS support with rustls
+- **TLS/HTTPS**: Native TLS support with rustls (TLS 1.3)
 - **Compression**: Gzip and Brotli compression support
 - **CORS**: Built-in CORS handling
+- **Docker Support**: Ready-to-use Dockerfile and docker-compose
+
+### RFC Compliance
+- **HTTP Caching (RFC 9111)**: Full Cache-Control support, Age header, conditional requests
+- **Range Requests (RFC 9110)**: 206 Partial Content for video streaming and large downloads
+- **Stale Content (RFC 5861)**: stale-while-revalidate and stale-if-error directives
+- **HEAD Method**: Returns headers without body for cache validation tools
+- **Vary Header Support**: Vary-based cache keying for content negotiation
+- **Standard Headers**: Age, Date, Via, Accept-Ranges headers on all responses
+
+### Reliability
+- **Rate Limiting**: Token bucket rate limiting per client IP
+- **Circuit Breaker**: Automatic origin failure detection and recovery
+- **Origin Health Checks**: Periodic background health monitoring for origins
+- **Stale-if-error**: Serve cached content during origin outages (5xx errors)
+- **Graceful Shutdown**: Clean shutdown with in-flight request handling
+
+### Observability
 - **Prometheus Metrics**: Comprehensive metrics for monitoring
 - **Cache Purge API**: Purge by key, prefix, or all entries
-- **Graceful Shutdown**: Clean shutdown with in-flight request handling
-- **Docker Support**: Ready-to-use Dockerfile and docker-compose
+- **Structured Logging**: JSON logging with tracing
+- **Admin API Authentication**: Token-based auth with optional IP restrictions
 
 ## Quick Start
 
@@ -95,15 +111,43 @@ success_threshold = 3        # Successes to close
 url = "https://api.example.com"
 timeout_secs = 30
 max_retries = 3
+health_check_path = "/health"        # Optional health check endpoint
+health_check_interval_secs = 30      # Check every 30 seconds
+health_check_timeout_secs = 5        # 5 second timeout
 
 [origins.static]
 url = "https://static.example.com"
 host_header = "static.example.com"
 timeout_secs = 60
 max_retries = 3
+health_check_path = "/_health"       # Optional: different origins can have different paths
+
+# Admin API authentication (optional)
+[admin]
+auth_enabled = true                  # Enable authentication for admin endpoints
+auth_token = "your-secret-token"     # Bearer token for authentication
+allowed_ips = ["127.0.0.1", "10.0.0.0/8"]  # Optional: restrict access by IP
 ```
 
 ## API Endpoints
+
+### Authentication
+
+When admin authentication is enabled (`admin.auth_enabled = true`), the following endpoints require a bearer token:
+- `/_cdn/stats` - Cache statistics
+- `/_cdn/purge` - Cache purge
+- `/_cdn/circuit-breakers` - Circuit breaker status
+- `/_cdn/origins/health` - Origin health status
+
+Public endpoints (no authentication required):
+- `/_cdn/health` - CDN health check
+- `/_cdn/metrics` - Prometheus metrics
+- All CDN proxy routes
+
+**Example authenticated request:**
+```bash
+curl -H "Authorization: Bearer your-secret-token" http://localhost:8080/_cdn/stats
+```
 
 ### CDN Proxy
 
@@ -150,6 +194,40 @@ GET /_cdn/circuit-breakers
 
 Returns the state of all circuit breakers for each origin.
 
+### Origin Health Status
+
+```
+GET /_cdn/origins/health
+```
+
+Returns health check status for all origins:
+
+```json
+{
+  "origins": {
+    "myapp": {
+      "status": "healthy",
+      "last_check": 1705593600,
+      "last_success": 1705593600,
+      "last_failure": null,
+      "consecutive_failures": 0,
+      "response_time_ms": 45,
+      "error_message": null
+    },
+    "static": {
+      "status": "unhealthy",
+      "last_check": 1705593600,
+      "last_failure": 1705593600,
+      "consecutive_failures": 3,
+      "response_time_ms": 5000,
+      "error_message": "Connection timeout"
+    }
+  }
+}
+```
+
+Health status values: `healthy`, `unhealthy`, `unknown`
+
 ### Cache Purge
 
 ```
@@ -170,10 +248,34 @@ Content-Type: application/json
 
 The CDN adds these headers to responses:
 
-- `X-Cache`: Cache status (HIT, MISS, STALE, BYPASS)
-- `X-CDN`: CDN identifier (Screaming-Eagle)
-- `X-RateLimit-Remaining`: Remaining requests in window
-- `Retry-After`: Seconds until rate limit resets (when limited)
+| Header | Description |
+|--------|-------------|
+| `X-Cache` | Cache status: HIT, MISS, STALE, STALE-IF-ERROR, BYPASS |
+| `X-Cache-Key` | Cache key used for this request |
+| `Age` | Seconds since response was cached (RFC 9111) |
+| `Date` | Response generation timestamp (RFC 9110) |
+| `Via` | Proxy identifier: `1.1 screaming-eagle` (RFC 9110) |
+| `Accept-Ranges` | Always `bytes` - indicates range request support |
+| `Content-Range` | Byte range for 206 responses (e.g., `bytes 0-1023/4096`) |
+| `X-RateLimit-Remaining` | Remaining requests in current window |
+| `Retry-After` | Seconds until rate limit resets (when limited) |
+
+### Range Requests
+
+The CDN supports HTTP Range requests for partial content delivery:
+
+```bash
+# Request first 1KB of a file
+curl -H "Range: bytes=0-1023" http://localhost:8080/static/video.mp4
+
+# Response: 206 Partial Content
+# Content-Range: bytes 0-1023/10485760
+```
+
+Use cases:
+- Video streaming (seeking)
+- Resumable downloads
+- Large file transfers
 
 ## Environment Variables
 
@@ -268,6 +370,19 @@ cargo test
 # Run with verbose output
 cargo test -- --nocapture
 ```
+
+## RFC Compliance
+
+For detailed RFC compliance status, see [docs/RFC_COMPLIANCE.md](docs/RFC_COMPLIANCE.md).
+
+### Summary
+
+| RFC | Title | Status |
+|-----|-------|--------|
+| RFC 9110 | HTTP Semantics | Compliant (GET, HEAD, Range, conditional requests) |
+| RFC 9111 | HTTP Caching | Compliant (Cache-Control, Age, Vary) |
+| RFC 5861 | Stale Content Extensions | Compliant (stale-while-revalidate, stale-if-error) |
+| RFC 8446 | TLS 1.3 | Compliant (via rustls) |
 
 ## License
 

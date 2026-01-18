@@ -27,6 +27,9 @@ pub struct Config {
 
     #[serde(default)]
     pub tls: Option<TlsConfig>,
+
+    #[serde(default)]
+    pub admin: AdminConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +83,26 @@ pub struct OriginConfig {
 
     #[serde(default)]
     pub headers: HashMap<String, String>,
+
+    /// Health check path (e.g., "/health" or "/_health")
+    #[serde(default)]
+    pub health_check_path: Option<String>,
+
+    /// Health check interval in seconds (default: 30)
+    #[serde(default = "default_health_check_interval")]
+    pub health_check_interval_secs: u64,
+
+    /// Health check timeout in seconds (default: 5)
+    #[serde(default = "default_health_check_timeout")]
+    pub health_check_timeout_secs: u64,
+}
+
+fn default_health_check_interval() -> u64 {
+    30
+}
+
+fn default_health_check_timeout() -> u64 {
+    5
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +148,31 @@ pub struct CircuitBreakerConfig {
 pub struct TlsConfig {
     pub cert_path: String,
     pub key_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminConfig {
+    /// Enable authentication for admin endpoints
+    #[serde(default)]
+    pub auth_enabled: bool,
+
+    /// Bearer token for admin API authentication
+    #[serde(default)]
+    pub auth_token: Option<String>,
+
+    /// Allowed IP addresses for admin endpoints (empty = all allowed)
+    #[serde(default)]
+    pub allowed_ips: Vec<String>,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            auth_enabled: false,
+            auth_token: None,
+            allowed_ips: Vec::new(),
+        }
+    }
 }
 
 // Default value functions
@@ -229,6 +277,7 @@ impl Default for Config {
             rate_limit: RateLimitConfig::default(),
             circuit_breaker: CircuitBreakerConfig::default(),
             tls: None,
+            admin: AdminConfig::default(),
         }
     }
 }
@@ -316,5 +365,13 @@ impl CacheConfig {
 impl OriginConfig {
     pub fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_secs)
+    }
+
+    pub fn health_check_timeout(&self) -> Duration {
+        Duration::from_secs(self.health_check_timeout_secs)
+    }
+
+    pub fn health_check_interval(&self) -> Duration {
+        Duration::from_secs(self.health_check_interval_secs)
     }
 }

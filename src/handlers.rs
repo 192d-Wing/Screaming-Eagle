@@ -21,6 +21,7 @@ use crate::cache::{
 use crate::circuit_breaker::{CircuitBreakerManager, CircuitState};
 use crate::config::Config;
 use crate::error::{CdnError, CdnResult};
+use crate::health::{HealthChecker, OriginHealth};
 use crate::metrics::Metrics;
 use crate::origin::OriginFetcher;
 use crate::range::{extract_range, parse_range_header, ByteRange, RangeParseResult};
@@ -33,6 +34,7 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub rate_limiter: Arc<RateLimiter>,
     pub circuit_breaker: Arc<CircuitBreakerManager>,
+    pub health_checker: Arc<HealthChecker>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +75,11 @@ pub struct CircuitBreakerStatusResponse {
 pub struct OriginCircuitStatus {
     pub origin: String,
     pub state: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OriginHealthResponse {
+    pub origins: HashMap<String, OriginHealth>,
 }
 
 // Health check endpoint
@@ -142,6 +149,14 @@ pub async fn circuit_breaker_status(
         .collect();
 
     Json(CircuitBreakerStatusResponse { origins })
+}
+
+// Origin health status endpoint
+pub async fn origin_health_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<OriginHealthResponse> {
+    let origins = state.health_checker.get_all_statuses();
+    Json(OriginHealthResponse { origins })
 }
 
 // Main CDN handler - supports both GET and HEAD methods

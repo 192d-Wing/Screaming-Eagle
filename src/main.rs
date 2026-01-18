@@ -1,4 +1,5 @@
 use axum::{
+    middleware,
     routing::{get, post},
     Router,
 };
@@ -15,13 +16,15 @@ use tower_http::{
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+use screaming_eagle::auth::{admin_auth_middleware, AdminAuth};
 use screaming_eagle::cache::Cache;
 use screaming_eagle::circuit_breaker::{self, CircuitBreakerManager};
 use screaming_eagle::config::{self, Config};
 use screaming_eagle::handlers::{
     self, cache_stats, cdn_handler, circuit_breaker_status, health, metrics as metrics_handler,
-    purge_cache, AppState,
+    origin_health_status, purge_cache, AppState,
 };
+use screaming_eagle::health::{HealthChecker, spawn_health_checks};
 use screaming_eagle::metrics::Metrics;
 use screaming_eagle::origin::OriginFetcher;
 use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter};
@@ -61,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
     let cache = Arc::new(Cache::new(config.cache.clone()));
     let origin = Arc::new(OriginFetcher::new(config.origins.clone())?);
     let metrics = Arc::new(Metrics::new());
+    let health_checker = Arc::new(HealthChecker::new(config.origins.clone()));
 
     let state = Arc::new(AppState {
         cache: cache.clone(),
@@ -69,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
         metrics,
         rate_limiter: rate_limiter.clone(),
         circuit_breaker: circuit_breaker.clone(),
+        health_checker: health_checker.clone(),
     });
 
     // Start background cache cleanup task
@@ -91,8 +96,18 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Start origin health check tasks
+    let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::watch::channel(false);
+    spawn_health_checks(health_checker.clone(), health_shutdown_rx);
+
+    // Initialize admin authentication
+    let admin_auth = Arc::new(AdminAuth::new(config.admin.clone()));
+    if config.admin.auth_enabled {
+        info!("Admin API authentication enabled");
+    }
+
     // Build router
-    let app = build_router(state);
+    let app = build_router(state, admin_auth);
 
     // Start server
     let addr: SocketAddr = config.server_addr().parse()?;
@@ -100,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
     // Check for TLS configuration
     if let Some(ref tls_config) = config.tls {
         info!("TLS enabled, loading certificates");
-        start_tls_server(addr, app, tls_config).await?;
+        start_tls_server(addr, app, tls_config, health_shutdown_tx).await?;
     } else {
         info!("Listening on http://{}", addr);
         let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -108,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal_with_health(health_shutdown_tx))
         .await?;
     }
 
@@ -120,6 +135,7 @@ async fn start_tls_server(
     addr: SocketAddr,
     app: Router,
     tls_config: &config::TlsConfig,
+    health_shutdown_tx: tokio::sync::watch::Sender<bool>,
 ) -> anyhow::Result<()> {
     use axum_server::tls_rustls::RustlsConfig;
 
@@ -134,6 +150,8 @@ async fn start_tls_server(
     // Spawn shutdown handler
     tokio::spawn(async move {
         shutdown_signal().await;
+        // Signal health checks to stop
+        let _ = health_shutdown_tx.send(true);
         handle_clone.graceful_shutdown(Some(Duration::from_secs(30)));
     });
 
@@ -175,14 +193,27 @@ fn init_logging(config: &config::LoggingConfig) {
     }
 }
 
-fn build_router(state: Arc<AppState>) -> Router {
-    // API routes (not rate limited)
-    let api_routes = Router::new()
+fn build_router(state: Arc<AppState>, admin_auth: Arc<AdminAuth>) -> Router {
+    // Public API routes (no auth required)
+    let public_api_routes = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics_handler));
+
+    // Protected admin routes (auth required when enabled)
+    let protected_api_routes = Router::new()
         .route("/stats", get(cache_stats))
-        .route("/metrics", get(metrics_handler))
         .route("/purge", post(purge_cache))
-        .route("/circuit-breakers", get(circuit_breaker_status));
+        .route("/circuit-breakers", get(circuit_breaker_status))
+        .route("/origins/health", get(origin_health_status))
+        .route_layer(middleware::from_fn_with_state(
+            admin_auth.clone(),
+            admin_auth_middleware,
+        ));
+
+    // Combined API routes
+    let api_routes = Router::new()
+        .merge(public_api_routes)
+        .merge(protected_api_routes);
 
     // CDN routes - support both GET and HEAD methods (RFC 9110)
     let cdn_routes = Router::new()
@@ -231,4 +262,10 @@ async fn shutdown_signal() {
     }
 
     info!("Shutdown signal received, starting graceful shutdown");
+}
+
+async fn shutdown_signal_with_health(health_shutdown_tx: tokio::sync::watch::Sender<bool>) {
+    shutdown_signal().await;
+    // Signal health checks to stop
+    let _ = health_shutdown_tx.send(true);
 }
