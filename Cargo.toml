@@ -1,0 +1,60 @@
+[package]
+name = "screaming-eagle"
+version = "0.1.0"
+edition = "2021"
+description = "A high-performance CDN written in Rust"
+authors = ["Screaming Eagle Contributors"]
+license = "MIT"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.4", features = ["util", "timeout"] }
+tower-http = { version = "0.5", features = ["cors", "compression-gzip", "compression-br", "trace"] }
+
+# HTTP client for origin fetching
+reqwest = { version = "0.11", features = ["gzip", "brotli", "stream"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Concurrent data structures
+dashmap = "5"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Hashing for ETags
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+base64 = "0.21"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Async utilities
+futures = "0.3"
+
+# Byte handling
+bytes = "1"
+
+# URL parsing
+url = "2"
+
+# Metrics
+prometheus = "0.13"
+
+# System info
+num_cpus = "1.16"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

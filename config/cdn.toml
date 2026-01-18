@@ -1,0 +1,41 @@
+# Screaming Eagle CDN Configuration
+
+[server]
+host = "0.0.0.0"
+port = 8080
+workers = 4
+request_timeout_secs = 30
+
+[cache]
+max_size_mb = 1024          # 1GB total cache size
+max_entry_size_mb = 100      # 100MB max per entry
+default_ttl_secs = 3600      # 1 hour default TTL
+max_ttl_secs = 86400         # 24 hour max TTL
+stale_while_revalidate_secs = 60
+respect_cache_control = true
+
+[logging]
+level = "info"
+json_format = false
+
+# Origin servers
+# Each origin has a name that's used in the URL path: /<origin-name>/<path>
+
+[origins.example]
+url = "https://example.com"
+timeout_secs = 30
+max_retries = 3
+
+[origins.api]
+url = "https://api.example.com"
+host_header = "api.example.com"
+timeout_secs = 10
+max_retries = 2
+
+[origins.api.headers]
+Authorization = "Bearer your-token-here"
+
+[origins.static]
+url = "https://static.example.com"
+timeout_secs = 60
+max_retries = 3
