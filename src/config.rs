@@ -30,6 +30,12 @@ pub struct Config {
 
     #[serde(default)]
     pub admin: AdminConfig,
+
+    #[serde(default)]
+    pub coalesce: CoalesceConfig,
+
+    #[serde(default)]
+    pub error_pages: ErrorPagesConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +181,88 @@ impl Default for AdminConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoalesceConfig {
+    /// Enable request coalescing (default: true)
+    #[serde(default = "default_coalesce_enabled")]
+    pub enabled: bool,
+
+    /// Maximum number of requests that can wait for a single in-flight request
+    #[serde(default = "default_max_waiters")]
+    pub max_waiters: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorPagesConfig {
+    /// Enable custom error pages (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Directory containing custom error page templates
+    #[serde(default = "default_error_pages_dir")]
+    pub directory: String,
+
+    /// Custom error page for 400 Bad Request
+    #[serde(default)]
+    pub page_400: Option<String>,
+
+    /// Custom error page for 404 Not Found
+    #[serde(default)]
+    pub page_404: Option<String>,
+
+    /// Custom error page for 500 Internal Server Error
+    #[serde(default)]
+    pub page_500: Option<String>,
+
+    /// Custom error page for 502 Bad Gateway
+    #[serde(default)]
+    pub page_502: Option<String>,
+
+    /// Custom error page for 503 Service Unavailable
+    #[serde(default)]
+    pub page_503: Option<String>,
+
+    /// Custom error page for 504 Gateway Timeout
+    #[serde(default)]
+    pub page_504: Option<String>,
+}
+
+impl Default for ErrorPagesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: default_error_pages_dir(),
+            page_400: None,
+            page_404: None,
+            page_500: None,
+            page_502: None,
+            page_503: None,
+            page_504: None,
+        }
+    }
+}
+
+fn default_error_pages_dir() -> String {
+    "error_pages".to_string()
+}
+
+impl Default for CoalesceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_coalesce_enabled(),
+            max_waiters: default_max_waiters(),
+        }
+    }
+}
+
+fn default_coalesce_enabled() -> bool {
+    true
+}
+
+fn default_max_waiters() -> usize {
+    1000
+}
+
 // Default value functions
 fn default_server() -> ServerConfig {
     ServerConfig {
@@ -278,6 +366,8 @@ impl Default for Config {
             circuit_breaker: CircuitBreakerConfig::default(),
             tls: None,
             admin: AdminConfig::default(),
+            coalesce: CoalesceConfig::default(),
+            error_pages: ErrorPagesConfig::default(),
         }
     }
 }

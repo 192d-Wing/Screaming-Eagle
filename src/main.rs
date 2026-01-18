@@ -19,10 +19,13 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use screaming_eagle::auth::{admin_auth_middleware, AdminAuth};
 use screaming_eagle::cache::Cache;
 use screaming_eagle::circuit_breaker::{self, CircuitBreakerManager};
+use screaming_eagle::coalesce::RequestCoalescer;
 use screaming_eagle::config::{self, Config};
+use screaming_eagle::error::init_error_pages;
+use screaming_eagle::error_pages::ErrorPages;
 use screaming_eagle::handlers::{
-    self, cache_stats, cdn_handler, circuit_breaker_status, health, metrics as metrics_handler,
-    origin_health_status, purge_cache, AppState,
+    self, cache_stats, cdn_handler, circuit_breaker_status, coalesce_stats, health,
+    metrics as metrics_handler, origin_health_status, purge_cache, warm_cache, AppState,
 };
 use screaming_eagle::health::{HealthChecker, spawn_health_checks};
 use screaming_eagle::metrics::Metrics;
@@ -41,6 +44,14 @@ async fn main() -> anyhow::Result<()> {
         "Starting Screaming Eagle CDN v{}",
         env!("CARGO_PKG_VERSION")
     );
+
+    // Initialize error pages
+    let error_pages = ErrorPages::new(&config.error_pages);
+    if error_pages.is_enabled() {
+        let pages = error_pages.available_pages();
+        info!("Custom error pages enabled ({} pages loaded)", pages.len());
+    }
+    init_error_pages(error_pages);
 
     // Initialize rate limiter
     let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig {
@@ -65,6 +76,11 @@ async fn main() -> anyhow::Result<()> {
     let origin = Arc::new(OriginFetcher::new(config.origins.clone())?);
     let metrics = Arc::new(Metrics::new());
     let health_checker = Arc::new(HealthChecker::new(config.origins.clone()));
+    let coalescer = Arc::new(RequestCoalescer::new(config.coalesce.max_waiters));
+
+    if config.coalesce.enabled {
+        info!("Request coalescing enabled (max {} waiters)", config.coalesce.max_waiters);
+    }
 
     let state = Arc::new(AppState {
         cache: cache.clone(),
@@ -74,6 +90,8 @@ async fn main() -> anyhow::Result<()> {
         rate_limiter: rate_limiter.clone(),
         circuit_breaker: circuit_breaker.clone(),
         health_checker: health_checker.clone(),
+        coalescer,
+        coalesce_enabled: config.coalesce.enabled,
     });
 
     // Start background cache cleanup task
@@ -203,8 +221,10 @@ fn build_router(state: Arc<AppState>, admin_auth: Arc<AdminAuth>) -> Router {
     let protected_api_routes = Router::new()
         .route("/stats", get(cache_stats))
         .route("/purge", post(purge_cache))
+        .route("/warm", post(warm_cache))
         .route("/circuit-breakers", get(circuit_breaker_status))
         .route("/origins/health", get(origin_health_status))
+        .route("/coalesce", get(coalesce_stats))
         .route_layer(middleware::from_fn_with_state(
             admin_auth.clone(),
             admin_auth_middleware,

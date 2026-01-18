@@ -19,6 +19,7 @@ use crate::cache::{
     generate_cache_key_with_vary, parse_cache_control, Cache, CacheEntry, CacheStats, CacheStatus,
 };
 use crate::circuit_breaker::{CircuitBreakerManager, CircuitState};
+use crate::coalesce::{AcquireResult, CoalescedResponse, CoalesceStats, RequestCoalescer};
 use crate::config::Config;
 use crate::error::{CdnError, CdnResult};
 use crate::health::{HealthChecker, OriginHealth};
@@ -35,6 +36,8 @@ pub struct AppState {
     pub rate_limiter: Arc<RateLimiter>,
     pub circuit_breaker: Arc<CircuitBreakerManager>,
     pub health_checker: Arc<HealthChecker>,
+    pub coalescer: Arc<RequestCoalescer>,
+    pub coalesce_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +83,36 @@ pub struct OriginCircuitStatus {
 #[derive(Debug, Serialize)]
 pub struct OriginHealthResponse {
     pub origins: HashMap<String, OriginHealth>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CoalesceStatsResponse {
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub stats: CoalesceStats,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WarmCacheRequest {
+    /// List of URLs to warm (relative paths like "/origin/path")
+    pub urls: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WarmCacheResponse {
+    pub success: bool,
+    pub message: String,
+    pub warmed: usize,
+    pub failed: usize,
+    pub results: Vec<WarmResult>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WarmResult {
+    pub url: String,
+    pub success: bool,
+    pub cached: bool,
+    pub error: Option<String>,
 }
 
 // Health check endpoint
@@ -157,6 +190,147 @@ pub async fn origin_health_status(
 ) -> Json<OriginHealthResponse> {
     let origins = state.health_checker.get_all_statuses();
     Json(OriginHealthResponse { origins })
+}
+
+// Coalesce statistics endpoint
+pub async fn coalesce_stats(
+    State(state): State<Arc<AppState>>,
+) -> Json<CoalesceStatsResponse> {
+    Json(CoalesceStatsResponse {
+        enabled: state.coalesce_enabled,
+        stats: state.coalescer.stats(),
+    })
+}
+
+// Cache warming endpoint - preload content into cache
+pub async fn warm_cache(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<WarmCacheRequest>,
+) -> Json<WarmCacheResponse> {
+    let mut results = Vec::with_capacity(request.urls.len());
+    let mut warmed = 0;
+    let mut failed = 0;
+
+    for url in &request.urls {
+        // Parse URL to extract origin and path
+        // Expected format: "/origin/path" or "origin/path"
+        let url = url.trim_start_matches('/');
+        let parts: Vec<&str> = url.splitn(2, '/').collect();
+
+        if parts.is_empty() {
+            results.push(WarmResult {
+                url: url.to_string(),
+                success: false,
+                cached: false,
+                error: Some("Invalid URL format".to_string()),
+            });
+            failed += 1;
+            continue;
+        }
+
+        let (origin, path) = if parts.len() == 2 {
+            (parts[0], parts[1])
+        } else {
+            // Try default origin if only one configured
+            let origins = state.origin.origin_names();
+            if origins.len() == 1 {
+                (origins[0], parts[0])
+            } else {
+                results.push(WarmResult {
+                    url: url.to_string(),
+                    success: false,
+                    cached: false,
+                    error: Some("Origin must be specified: /origin/path".to_string()),
+                });
+                failed += 1;
+                continue;
+            }
+        };
+
+        // Check if origin exists
+        if !state.origin.has_origin(origin) {
+            results.push(WarmResult {
+                url: url.to_string(),
+                success: false,
+                cached: false,
+                error: Some(format!("Unknown origin: {}", origin)),
+            });
+            failed += 1;
+            continue;
+        }
+
+        // Generate cache key
+        let cache_key = generate_cache_key_with_vary(
+            origin,
+            &format!("/{}", path),
+            None,
+            Some("accept-encoding"),
+            &HashMap::new(),
+        );
+
+        // Check if already cached
+        if state.cache.get(&cache_key).is_some() {
+            results.push(WarmResult {
+                url: url.to_string(),
+                success: true,
+                cached: true,
+                error: None,
+            });
+            warmed += 1;
+            continue;
+        }
+
+        // Fetch from origin
+        match fetch_from_origin(&state, origin, path, None, &HeaderMap::new()).await {
+            Ok((body, headers, status)) => {
+                if is_cacheable(status, &headers) {
+                    // Store in cache
+                    let vary_header = headers.get("vary").map(|s| s.as_str());
+                    let final_cache_key = generate_cache_key_with_vary(
+                        origin,
+                        &format!("/{}", path),
+                        None,
+                        vary_header.or(Some("accept-encoding")),
+                        &HashMap::new(),
+                    );
+                    store_in_cache(&state, &final_cache_key, body, headers, status);
+
+                    results.push(WarmResult {
+                        url: url.to_string(),
+                        success: true,
+                        cached: false,
+                        error: None,
+                    });
+                    warmed += 1;
+                } else {
+                    results.push(WarmResult {
+                        url: url.to_string(),
+                        success: false,
+                        cached: false,
+                        error: Some("Response not cacheable".to_string()),
+                    });
+                    failed += 1;
+                }
+            }
+            Err(e) => {
+                results.push(WarmResult {
+                    url: url.to_string(),
+                    success: false,
+                    cached: false,
+                    error: Some(e.to_string()),
+                });
+                failed += 1;
+            }
+        }
+    }
+
+    Json(WarmCacheResponse {
+        success: failed == 0,
+        message: format!("Warmed {} URLs, {} failed", warmed, failed),
+        warmed,
+        failed,
+        results,
+    })
 }
 
 // Main CDN handler - supports both GET and HEAD methods
@@ -304,9 +478,51 @@ pub async fn cdn_handler(
                 }
             }
             None => {
-                // Cache miss - fetch from origin
+                // Cache miss - fetch from origin (with optional coalescing)
                 cache_status = CacheStatus::Miss;
-                match fetch_from_origin_with_circuit_breaker(&state, &origin, &path, query_string.as_deref(), &headers).await {
+
+                // Use coalescing to prevent thundering herd
+                let fetch_result = if state.coalesce_enabled {
+                    match state.coalescer.try_acquire(&cache_key) {
+                        AcquireResult::Fetch(guard) => {
+                            // We are the leader - fetch from origin
+                            match fetch_from_origin_with_circuit_breaker(&state, &origin, &path, query_string.as_deref(), &headers).await {
+                                Ok((body, hdrs, status)) => {
+                                    // Complete the coalesce to notify waiters
+                                    guard.complete(CoalescedResponse {
+                                        body: body.clone(),
+                                        headers: hdrs.clone(),
+                                        status_code: status.as_u16(),
+                                    });
+                                    Ok((body, hdrs, status))
+                                }
+                                Err(e) => {
+                                    // Complete with error to notify waiters
+                                    guard.complete_error(e.to_string());
+                                    Err(e)
+                                }
+                            }
+                        }
+                        AcquireResult::Wait(mut receiver) => {
+                            // Another request is already fetching - wait for result
+                            tracing::debug!(cache_key = %cache_key, "Waiting for coalesced request");
+                            match receiver.recv().await {
+                                Ok(Ok(coalesced)) => {
+                                    let status = StatusCode::from_u16(coalesced.status_code)
+                                        .unwrap_or(StatusCode::OK);
+                                    Ok((coalesced.body, coalesced.headers, status))
+                                }
+                                Ok(Err(err)) => Err(CdnError::OriginError(err)),
+                                Err(_) => Err(CdnError::Internal("Coalesced request was cancelled".to_string())),
+                            }
+                        }
+                    }
+                } else {
+                    // Coalescing disabled - direct fetch
+                    fetch_from_origin_with_circuit_breaker(&state, &origin, &path, query_string.as_deref(), &headers).await
+                };
+
+                match fetch_result {
                     Ok(origin_response) => {
                         // Check if origin returned 5xx error - try stale-if-error
                         if origin_response.2.is_server_error() {
