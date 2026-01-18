@@ -42,6 +42,9 @@ pub struct Config {
 
     #[serde(default)]
     pub security: SecurityConfig,
+
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -557,6 +560,229 @@ impl Default for IpAccessConfig {
     }
 }
 
+/// Observability configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservabilityConfig {
+    /// Tracing configuration
+    #[serde(default)]
+    pub tracing: TracingConfig,
+
+    /// Metrics configuration
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+
+    /// Logging configuration
+    #[serde(default)]
+    pub request_logging: RequestLoggingConfig,
+
+    /// Alerting configuration
+    #[serde(default)]
+    pub alerting: AlertingConfig,
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            tracing: TracingConfig::default(),
+            metrics: MetricsConfig::default(),
+            request_logging: RequestLoggingConfig::default(),
+            alerting: AlertingConfig::default(),
+        }
+    }
+}
+
+/// OpenTelemetry tracing configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TracingConfig {
+    /// Enable OpenTelemetry tracing (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// OTLP endpoint (default: http://localhost:4317)
+    #[serde(default = "default_otlp_endpoint")]
+    pub otlp_endpoint: Option<String>,
+
+    /// Service name for traces
+    #[serde(default = "default_service_name")]
+    pub service_name: String,
+
+    /// Sample rate (0.0 to 1.0, default: 1.0)
+    #[serde(default = "default_sample_rate")]
+    pub sample_rate: f64,
+
+    /// Propagate trace context from incoming requests
+    #[serde(default = "default_true")]
+    pub propagate_context: bool,
+}
+
+impl Default for TracingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            otlp_endpoint: default_otlp_endpoint(),
+            service_name: default_service_name(),
+            sample_rate: default_sample_rate(),
+            propagate_context: true,
+        }
+    }
+}
+
+fn default_otlp_endpoint() -> Option<String> {
+    Some("http://localhost:4317".to_string())
+}
+
+fn default_service_name() -> String {
+    "screaming-eagle-cdn".to_string()
+}
+
+fn default_sample_rate() -> f64 {
+    1.0
+}
+
+/// Enhanced metrics configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    /// Enable enhanced metrics (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Maximum number of paths to track individually
+    #[serde(default = "default_max_tracked_paths")]
+    pub max_tracked_paths: usize,
+
+    /// Enable per-path metrics (can increase cardinality)
+    #[serde(default = "default_true")]
+    pub per_path_metrics: bool,
+
+    /// Include histogram buckets for latency
+    #[serde(default = "default_true")]
+    pub latency_histograms: bool,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_tracked_paths: default_max_tracked_paths(),
+            per_path_metrics: true,
+            latency_histograms: true,
+        }
+    }
+}
+
+fn default_max_tracked_paths() -> usize {
+    1000
+}
+
+/// Request logging configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLoggingConfig {
+    /// Enable structured request logging (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Log level for successful requests
+    #[serde(default = "default_success_log_level")]
+    pub success_log_level: String,
+
+    /// Log level for error requests
+    #[serde(default = "default_error_log_level")]
+    pub error_log_level: String,
+
+    /// Include request headers in logs
+    #[serde(default)]
+    pub log_headers: bool,
+
+    /// Include response headers in logs
+    #[serde(default)]
+    pub log_response_headers: bool,
+
+    /// Headers to redact from logs
+    #[serde(default = "default_redacted_headers")]
+    pub redacted_headers: Vec<String>,
+}
+
+impl Default for RequestLoggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            success_log_level: default_success_log_level(),
+            error_log_level: default_error_log_level(),
+            log_headers: false,
+            log_response_headers: false,
+            redacted_headers: default_redacted_headers(),
+        }
+    }
+}
+
+fn default_success_log_level() -> String {
+    "debug".to_string()
+}
+
+fn default_error_log_level() -> String {
+    "error".to_string()
+}
+
+fn default_redacted_headers() -> Vec<String> {
+    vec![
+        "authorization".to_string(),
+        "cookie".to_string(),
+        "x-api-key".to_string(),
+    ]
+}
+
+/// Alerting configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertingConfig {
+    /// Enable alerting (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Error rate threshold percentage
+    #[serde(default = "default_error_rate_threshold")]
+    pub error_rate_threshold: f64,
+
+    /// P99 latency threshold in milliseconds
+    #[serde(default = "default_latency_threshold")]
+    pub latency_p99_threshold_ms: u64,
+
+    /// Minimum cache hit ratio
+    #[serde(default = "default_cache_hit_ratio_min")]
+    pub cache_hit_ratio_min: f64,
+
+    /// Origin error rate threshold
+    #[serde(default = "default_origin_error_rate")]
+    pub origin_error_rate_threshold: f64,
+}
+
+impl Default for AlertingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            error_rate_threshold: default_error_rate_threshold(),
+            latency_p99_threshold_ms: default_latency_threshold(),
+            cache_hit_ratio_min: default_cache_hit_ratio_min(),
+            origin_error_rate_threshold: default_origin_error_rate(),
+        }
+    }
+}
+
+fn default_error_rate_threshold() -> f64 {
+    5.0
+}
+
+fn default_latency_threshold() -> u64 {
+    1000
+}
+
+fn default_cache_hit_ratio_min() -> f64 {
+    0.7
+}
+
+fn default_origin_error_rate() -> f64 {
+    10.0
+}
+
 impl Default for CoalesceConfig {
     fn default() -> Self {
         Self {
@@ -681,6 +907,7 @@ impl Default for Config {
             error_pages: ErrorPagesConfig::default(),
             connection_pool: ConnectionPoolConfig::default(),
             security: SecurityConfig::default(),
+            observability: ObservabilityConfig::default(),
         }
     }
 }

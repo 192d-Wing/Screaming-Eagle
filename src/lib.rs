@@ -10,6 +10,7 @@ pub mod error_pages;
 pub mod handlers;
 pub mod health;
 pub mod metrics;
+pub mod observability;
 pub mod origin;
 pub mod range;
 pub mod rate_limit;

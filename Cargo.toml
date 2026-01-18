@@ -48,6 +48,15 @@ hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# OpenTelemetry for distributed tracing
+opentelemetry = { version = "0.21", features = ["trace"] }
+opentelemetry-otlp = { version = "0.14", features = ["tonic"] }
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.22"
+
+# UUID for trace/request IDs
+uuid = { version = "1", features = ["v4"] }
+
 # Error handling
 thiserror = "1"
 anyhow = "1"
