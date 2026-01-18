@@ -28,6 +28,8 @@ fn test_cache_operations() {
         expires_at: now + Duration::from_secs(3600),
         size: body.len(),
         stale_if_error_secs: Some(300),
+        access_count: 0,
+        last_accessed: now,
     };
 
     // Store the entry
@@ -69,6 +71,8 @@ fn test_cache_invalidation() {
         expires_at: now + Duration::from_secs(3600),
         size: 9,
         stale_if_error_secs: None,
+        access_count: 0,
+        last_accessed: now,
     };
 
     cache.set("key1".to_string(), entry.clone());

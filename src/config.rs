@@ -36,6 +36,9 @@ pub struct Config {
 
     #[serde(default)]
     pub error_pages: ErrorPagesConfig,
+
+    #[serde(default)]
+    pub connection_pool: ConnectionPoolConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +104,98 @@ pub struct OriginConfig {
     /// Health check timeout in seconds (default: 5)
     #[serde(default = "default_health_check_timeout")]
     pub health_check_timeout_secs: u64,
+}
+
+/// Connection pool configuration for origin connections
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionPoolConfig {
+    /// Maximum idle connections per host (default: 100)
+    #[serde(default = "default_pool_max_idle_per_host")]
+    pub max_idle_per_host: usize,
+
+    /// Idle connection timeout in seconds (default: 90)
+    #[serde(default = "default_pool_idle_timeout")]
+    pub idle_timeout_secs: u64,
+
+    /// Connection timeout in seconds (default: 10)
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout_secs: u64,
+
+    /// Enable TCP keepalive (default: true)
+    #[serde(default = "default_tcp_keepalive")]
+    pub tcp_keepalive: bool,
+
+    /// TCP keepalive interval in seconds (default: 60)
+    #[serde(default = "default_tcp_keepalive_interval")]
+    pub tcp_keepalive_interval_secs: u64,
+
+    /// Enable TCP nodelay (default: true)
+    #[serde(default = "default_tcp_nodelay")]
+    pub tcp_nodelay: bool,
+
+    /// Enable HTTP/2 (default: true)
+    #[serde(default = "default_http2_enabled")]
+    pub http2_enabled: bool,
+
+    /// HTTP/2 initial stream window size (default: 65535)
+    #[serde(default = "default_http2_initial_stream_window")]
+    pub http2_initial_stream_window_size: u32,
+
+    /// HTTP/2 initial connection window size (default: 65535)
+    #[serde(default = "default_http2_initial_connection_window")]
+    pub http2_initial_connection_window_size: u32,
+}
+
+impl Default for ConnectionPoolConfig {
+    fn default() -> Self {
+        Self {
+            max_idle_per_host: default_pool_max_idle_per_host(),
+            idle_timeout_secs: default_pool_idle_timeout(),
+            connect_timeout_secs: default_connect_timeout(),
+            tcp_keepalive: default_tcp_keepalive(),
+            tcp_keepalive_interval_secs: default_tcp_keepalive_interval(),
+            tcp_nodelay: default_tcp_nodelay(),
+            http2_enabled: default_http2_enabled(),
+            http2_initial_stream_window_size: default_http2_initial_stream_window(),
+            http2_initial_connection_window_size: default_http2_initial_connection_window(),
+        }
+    }
+}
+
+fn default_pool_max_idle_per_host() -> usize {
+    100
+}
+
+fn default_pool_idle_timeout() -> u64 {
+    90
+}
+
+fn default_connect_timeout() -> u64 {
+    10
+}
+
+fn default_tcp_keepalive() -> bool {
+    true
+}
+
+fn default_tcp_keepalive_interval() -> u64 {
+    60
+}
+
+fn default_tcp_nodelay() -> bool {
+    true
+}
+
+fn default_http2_enabled() -> bool {
+    true
+}
+
+fn default_http2_initial_stream_window() -> u32 {
+    65535 * 16 // 1MB - better for large files
+}
+
+fn default_http2_initial_connection_window() -> u32 {
+    65535 * 16 // 1MB
 }
 
 fn default_health_check_interval() -> u64 {
@@ -368,6 +463,7 @@ impl Default for Config {
             admin: AdminConfig::default(),
             coalesce: CoalesceConfig::default(),
             error_pages: ErrorPagesConfig::default(),
+            connection_pool: ConnectionPoolConfig::default(),
         }
     }
 }

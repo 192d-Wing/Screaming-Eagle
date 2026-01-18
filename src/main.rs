@@ -73,7 +73,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize other components
     let cache = Arc::new(Cache::new(config.cache.clone()));
-    let origin = Arc::new(OriginFetcher::new(config.origins.clone())?);
+    let origin = Arc::new(OriginFetcher::with_pool_config(
+        config.origins.clone(),
+        config.connection_pool.clone(),
+    )?);
     let metrics = Arc::new(Metrics::new());
     let health_checker = Arc::new(HealthChecker::new(config.origins.clone()));
     let coalescer = Arc::new(RequestCoalescer::new(config.coalesce.max_waiters));

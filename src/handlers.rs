@@ -760,6 +760,8 @@ fn store_in_cache(
         created_at: now,
         expires_at: now + ttl,
         stale_if_error_secs: directives.stale_if_error,
+        access_count: 0,
+        last_accessed: now,
     };
 
     state.cache.set(cache_key.to_string(), entry);

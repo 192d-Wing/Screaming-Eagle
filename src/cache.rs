@@ -2,7 +2,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
@@ -21,6 +21,23 @@ pub struct CacheEntry {
     pub size: usize,
     /// stale-if-error window in seconds (RFC 5861)
     pub stale_if_error_secs: Option<u64>,
+    /// Access count for LRU-K tracking
+    pub access_count: u32,
+    /// Last access time for LRU eviction
+    pub last_accessed: Instant,
+}
+
+impl CacheEntry {
+    /// Record an access to this entry (for LRU-K tracking)
+    pub fn record_access(&mut self) {
+        self.access_count = self.access_count.saturating_add(1);
+        self.last_accessed = Instant::now();
+    }
+
+    /// Get the access count
+    pub fn access_count(&self) -> u32 {
+        self.access_count
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +48,10 @@ pub struct CacheStats {
     pub total_size_bytes: usize,
     pub max_size_bytes: usize,
     pub hit_ratio: f64,
+    pub evictions: u64,
+    pub stale_hits: u64,
+    pub avg_entry_size_bytes: usize,
+    pub hot_entries: usize,  // Entries with access_count > threshold
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,39 +75,56 @@ impl CacheStatus {
     }
 }
 
+/// Threshold for considering an entry "hot" (frequently accessed)
+const HOT_ENTRY_THRESHOLD: u32 = 3;
+
 pub struct Cache {
     entries: DashMap<String, CacheEntry>,
     config: CacheConfig,
     current_size: AtomicUsize,
-    hits: AtomicUsize,
-    misses: AtomicUsize,
+    hits: AtomicU64,
+    misses: AtomicU64,
+    evictions: AtomicU64,
+    stale_hits: AtomicU64,
 }
 
 impl Cache {
     pub fn new(config: CacheConfig) -> Self {
+        // Configure DashMap with optimal shard count based on CPU cores
+        let shard_count = (num_cpus::get() * 4).next_power_of_two();
+        let entries = DashMap::with_capacity_and_shard_amount(10000, shard_count);
+
+        info!(shards = shard_count, "Initialized cache with {} shards", shard_count);
+
         Self {
-            entries: DashMap::new(),
+            entries,
             config,
             current_size: AtomicUsize::new(0),
-            hits: AtomicUsize::new(0),
-            misses: AtomicUsize::new(0),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
+            stale_hits: AtomicU64::new(0),
         }
     }
 
     pub fn get(&self, key: &str) -> Option<(CacheEntry, CacheStatus)> {
-        if let Some(entry) = self.entries.get(key) {
+        if let Some(mut entry) = self.entries.get_mut(key) {
             let now = Instant::now();
 
             if now < entry.expires_at {
+                // Record access for LRU-K tracking
+                entry.record_access();
                 self.hits.fetch_add(1, Ordering::Relaxed);
-                debug!(key = %key, "Cache HIT");
+                debug!(key = %key, access_count = entry.access_count(), "Cache HIT");
                 return Some((entry.clone(), CacheStatus::Hit));
             }
 
             // Check stale-while-revalidate window
             let stale_window = Duration::from_secs(self.config.stale_while_revalidate_secs);
             if now < entry.expires_at + stale_window {
+                entry.record_access();
                 self.hits.fetch_add(1, Ordering::Relaxed);
+                self.stale_hits.fetch_add(1, Ordering::Relaxed);
                 debug!(key = %key, "Cache STALE (within revalidation window)");
                 return Some((entry.clone(), CacheStatus::Stale));
             }
@@ -155,13 +193,11 @@ impl Cache {
     }
 
     pub fn invalidate(&self, key: &str) -> bool {
-        if let Some((_, entry)) = self.entries.remove(key) {
-            self.current_size.fetch_sub(entry.size, Ordering::Relaxed);
+        let removed = self.invalidate_internal(key, false);
+        if removed {
             info!(key = %key, "Invalidated cache entry");
-            true
-        } else {
-            false
         }
+        removed
     }
 
     pub fn invalidate_prefix(&self, prefix: &str) -> usize {
@@ -190,8 +226,8 @@ impl Cache {
     }
 
     pub fn stats(&self) -> CacheStats {
-        let hits = self.hits.load(Ordering::Relaxed) as u64;
-        let misses = self.misses.load(Ordering::Relaxed) as u64;
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
         let total = hits + misses;
         let hit_ratio = if total > 0 {
             hits as f64 / total as f64
@@ -199,13 +235,32 @@ impl Cache {
             0.0
         };
 
+        let total_entries = self.entries.len();
+        let total_size_bytes = self.current_size.load(Ordering::Relaxed);
+        let avg_entry_size_bytes = if total_entries > 0 {
+            total_size_bytes / total_entries
+        } else {
+            0
+        };
+
+        // Count hot entries (frequently accessed)
+        let hot_entries = self
+            .entries
+            .iter()
+            .filter(|e| e.access_count() >= HOT_ENTRY_THRESHOLD)
+            .count();
+
         CacheStats {
             hits,
             misses,
-            total_entries: self.entries.len(),
-            total_size_bytes: self.current_size.load(Ordering::Relaxed),
+            total_entries,
+            total_size_bytes,
             max_size_bytes: self.config.max_size_bytes(),
             hit_ratio,
+            evictions: self.evictions.load(Ordering::Relaxed),
+            stale_hits: self.stale_hits.load(Ordering::Relaxed),
+            avg_entry_size_bytes,
+            hot_entries,
         }
     }
 
@@ -217,7 +272,11 @@ impl Cache {
             return;
         }
 
-        // Simple LRU-like eviction: remove expired entries first, then oldest
+        // LRU-K eviction strategy:
+        // 1. Remove expired entries first
+        // 2. Remove cold entries (low access count) before hot entries
+        // 3. Within same access count, remove oldest entries
+
         let now = Instant::now();
 
         // First pass: remove expired entries
@@ -228,8 +287,9 @@ impl Cache {
             .map(|e| e.key().clone())
             .collect();
 
+        let expired_count = expired_keys.len();
         for key in expired_keys {
-            self.invalidate(&key);
+            self.invalidate_internal(&key, true);
         }
 
         // Check if we have enough space now
@@ -237,20 +297,51 @@ impl Cache {
             return;
         }
 
-        // Second pass: remove oldest entries until we have space
-        let mut entries_by_age: Vec<(String, Instant)> = self
+        // Second pass: LRU-K eviction - prioritize cold entries
+        // Score = access_count * 1000 + recency_score
+        // Lower score = more likely to evict
+        let mut entries_by_score: Vec<(String, u64)> = self
             .entries
             .iter()
-            .map(|e| (e.key().clone(), e.created_at))
+            .map(|e| {
+                let recency = e.last_accessed.elapsed().as_secs().min(1000);
+                // Lower access count and older access = lower score = evict first
+                let score = (e.access_count() as u64 * 1000).saturating_sub(recency);
+                (e.key().clone(), score)
+            })
             .collect();
 
-        entries_by_age.sort_by_key(|(_, created)| *created);
+        // Sort by score ascending (lowest score = evict first)
+        entries_by_score.sort_by_key(|(_, score)| *score);
 
-        for (key, _) in entries_by_age {
+        let mut evict_count = 0;
+        for (key, _) in entries_by_score {
             if self.current_size.load(Ordering::Relaxed) + needed_space <= max_size {
                 break;
             }
-            self.invalidate(&key);
+            self.invalidate_internal(&key, true);
+            evict_count += 1;
+        }
+
+        if expired_count > 0 || evict_count > 0 {
+            debug!(
+                expired = expired_count,
+                evicted = evict_count,
+                "Cache eviction completed"
+            );
+        }
+    }
+
+    /// Internal invalidation that optionally tracks evictions
+    fn invalidate_internal(&self, key: &str, is_eviction: bool) -> bool {
+        if let Some((_, entry)) = self.entries.remove(key) {
+            self.current_size.fetch_sub(entry.size, Ordering::Relaxed);
+            if is_eviction {
+                self.evictions.fetch_add(1, Ordering::Relaxed);
+            }
+            true
+        } else {
+            false
         }
     }
 
@@ -267,7 +358,7 @@ impl Cache {
 
         let count = expired_keys.len();
         for key in expired_keys {
-            self.invalidate(&key);
+            self.invalidate_internal(&key, true);
         }
 
         if count > 0 {

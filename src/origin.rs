@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
-use crate::config::OriginConfig;
+use crate::config::{ConnectionPoolConfig, OriginConfig};
 use crate::error::{CdnError, CdnResult};
 
 #[derive(Debug, Clone)]
@@ -25,13 +25,48 @@ pub struct OriginFetcher {
 
 impl OriginFetcher {
     pub fn new(origins: HashMap<String, OriginConfig>) -> CdnResult<Self> {
-        let client = Client::builder()
+        Self::with_pool_config(origins, ConnectionPoolConfig::default())
+    }
+
+    pub fn with_pool_config(
+        origins: HashMap<String, OriginConfig>,
+        pool_config: ConnectionPoolConfig,
+    ) -> CdnResult<Self> {
+        let mut builder = Client::builder()
             .gzip(true)
             .brotli(true)
-            .pool_max_idle_per_host(100)
-            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_max_idle_per_host(pool_config.max_idle_per_host)
+            .pool_idle_timeout(Duration::from_secs(pool_config.idle_timeout_secs))
+            .connect_timeout(Duration::from_secs(pool_config.connect_timeout_secs))
+            .tcp_nodelay(pool_config.tcp_nodelay);
+
+        // Configure TCP keepalive
+        if pool_config.tcp_keepalive {
+            builder = builder.tcp_keepalive(Duration::from_secs(pool_config.tcp_keepalive_interval_secs));
+        }
+
+        // Configure HTTP/2
+        if pool_config.http2_enabled {
+            builder = builder
+                .http2_prior_knowledge()
+                .http2_initial_stream_window_size(pool_config.http2_initial_stream_window_size)
+                .http2_initial_connection_window_size(pool_config.http2_initial_connection_window_size)
+                .http2_adaptive_window(true);
+        }
+
+        let client = builder
             .build()
             .map_err(|e| CdnError::Internal(format!("Failed to create HTTP client: {}", e)))?;
+
+        info!(
+            max_idle = pool_config.max_idle_per_host,
+            idle_timeout_secs = pool_config.idle_timeout_secs,
+            connect_timeout_secs = pool_config.connect_timeout_secs,
+            tcp_nodelay = pool_config.tcp_nodelay,
+            tcp_keepalive = pool_config.tcp_keepalive,
+            http2 = pool_config.http2_enabled,
+            "Initialized HTTP client with connection pool"
+        );
 
         Ok(Self { client, origins })
     }
