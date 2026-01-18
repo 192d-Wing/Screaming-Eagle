@@ -39,6 +39,11 @@ chrono = { version = "0.4", features = ["serde"] }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 base64 = "0.21"
 
+# Cryptographic signatures
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
 # Logging and tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

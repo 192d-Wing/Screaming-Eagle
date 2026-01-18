@@ -31,6 +31,9 @@ use screaming_eagle::health::{HealthChecker, spawn_health_checks};
 use screaming_eagle::metrics::Metrics;
 use screaming_eagle::origin::OriginFetcher;
 use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter};
+use screaming_eagle::security::{
+    ip_access_control_middleware, request_signing_middleware, security_headers_middleware, Security,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -127,8 +130,20 @@ async fn main() -> anyhow::Result<()> {
         info!("Admin API authentication enabled");
     }
 
+    // Initialize security
+    let security = Arc::new(Security::new(config.security.clone()));
+    if security.headers_enabled() {
+        info!("Security headers enabled");
+    }
+    if security.signing_enabled() {
+        info!("Request signing validation enabled");
+    }
+    if security.ip_control_enabled() {
+        info!("IP-based access control enabled");
+    }
+
     // Build router
-    let app = build_router(state, admin_auth);
+    let app = build_router(state, admin_auth, security);
 
     // Start server
     let addr: SocketAddr = config.server_addr().parse()?;
@@ -214,7 +229,7 @@ fn init_logging(config: &config::LoggingConfig) {
     }
 }
 
-fn build_router(state: Arc<AppState>, admin_auth: Arc<AdminAuth>) -> Router {
+fn build_router(state: Arc<AppState>, admin_auth: Arc<AdminAuth>, security: Arc<Security>) -> Router {
     // Public API routes (no auth required)
     let public_api_routes = Router::new()
         .route("/health", get(health))
@@ -243,7 +258,7 @@ fn build_router(state: Arc<AppState>, admin_auth: Arc<AdminAuth>) -> Router {
         .route("/{origin}/{*path}", get(cdn_handler).head(cdn_handler))
         .route("/{*path}", get(handlers::root_cdn_handler).head(handlers::root_cdn_handler));
 
-    // Combine routes
+    // Combine routes with security layers
     Router::new()
         .nest("/_cdn", api_routes)
         .merge(cdn_routes)
@@ -258,6 +273,19 @@ fn build_router(state: Arc<AppState>, admin_auth: Arc<AdminAuth>) -> Router {
                         .allow_headers(Any),
                 ),
         )
+        // Security middleware layers (applied to all routes)
+        .layer(middleware::from_fn_with_state(
+            security.clone(),
+            security_headers_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            security.clone(),
+            request_signing_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            security.clone(),
+            ip_access_control_middleware,
+        ))
         .with_state(state)
 }
 

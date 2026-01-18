@@ -39,6 +39,9 @@ pub struct Config {
 
     #[serde(default)]
     pub connection_pool: ConnectionPoolConfig,
+
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -341,6 +344,219 @@ fn default_error_pages_dir() -> String {
     "error_pages".to_string()
 }
 
+/// Security configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Security headers configuration
+    #[serde(default)]
+    pub headers: SecurityHeadersConfig,
+
+    /// Request signing configuration
+    #[serde(default)]
+    pub signing: RequestSigningConfig,
+
+    /// IP-based access control
+    #[serde(default)]
+    pub ip_access: IpAccessConfig,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            headers: SecurityHeadersConfig::default(),
+            signing: RequestSigningConfig::default(),
+            ip_access: IpAccessConfig::default(),
+        }
+    }
+}
+
+/// Security headers configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityHeadersConfig {
+    /// Enable security headers (default: true)
+    #[serde(default = "default_security_headers_enabled")]
+    pub enabled: bool,
+
+    /// Content-Security-Policy header value
+    #[serde(default = "default_csp")]
+    pub content_security_policy: Option<String>,
+
+    /// X-Frame-Options header value (e.g., "DENY", "SAMEORIGIN")
+    #[serde(default = "default_x_frame_options")]
+    pub x_frame_options: Option<String>,
+
+    /// Enable X-Content-Type-Options: nosniff (default: true)
+    #[serde(default = "default_true")]
+    pub x_content_type_options: bool,
+
+    /// X-XSS-Protection header value
+    #[serde(default = "default_x_xss_protection")]
+    pub x_xss_protection: Option<String>,
+
+    /// Strict-Transport-Security header value
+    #[serde(default)]
+    pub strict_transport_security: Option<String>,
+
+    /// Referrer-Policy header value
+    #[serde(default = "default_referrer_policy")]
+    pub referrer_policy: Option<String>,
+
+    /// Permissions-Policy header value
+    #[serde(default)]
+    pub permissions_policy: Option<String>,
+
+    /// Cross-Origin-Embedder-Policy header value
+    #[serde(default)]
+    pub cross_origin_embedder_policy: Option<String>,
+
+    /// Cross-Origin-Opener-Policy header value
+    #[serde(default)]
+    pub cross_origin_opener_policy: Option<String>,
+
+    /// Cross-Origin-Resource-Policy header value
+    #[serde(default)]
+    pub cross_origin_resource_policy: Option<String>,
+
+    /// Remove Server header from responses (default: true)
+    #[serde(default = "default_true")]
+    pub remove_server_header: bool,
+}
+
+impl Default for SecurityHeadersConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_security_headers_enabled(),
+            content_security_policy: default_csp(),
+            x_frame_options: default_x_frame_options(),
+            x_content_type_options: true,
+            x_xss_protection: default_x_xss_protection(),
+            strict_transport_security: None,
+            referrer_policy: default_referrer_policy(),
+            permissions_policy: None,
+            cross_origin_embedder_policy: None,
+            cross_origin_opener_policy: None,
+            cross_origin_resource_policy: None,
+            remove_server_header: true,
+        }
+    }
+}
+
+fn default_security_headers_enabled() -> bool {
+    true
+}
+
+fn default_csp() -> Option<String> {
+    Some("default-src 'self'".to_string())
+}
+
+fn default_x_frame_options() -> Option<String> {
+    Some("DENY".to_string())
+}
+
+fn default_x_xss_protection() -> Option<String> {
+    Some("1; mode=block".to_string())
+}
+
+fn default_referrer_policy() -> Option<String> {
+    Some("strict-origin-when-cross-origin".to_string())
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Request signing configuration for HMAC validation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestSigningConfig {
+    /// Enable request signing validation (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Secret key for HMAC validation
+    #[serde(default)]
+    pub secret_key: Option<String>,
+
+    /// Header name for signature (default: "X-Signature-256")
+    #[serde(default = "default_signature_header")]
+    pub signature_header: Option<String>,
+
+    /// Header name for timestamp (default: "X-Timestamp")
+    #[serde(default = "default_timestamp_header")]
+    pub timestamp_header: Option<String>,
+
+    /// Require signature on all requests (default: false)
+    #[serde(default)]
+    pub require_signature: bool,
+
+    /// Require timestamp for replay protection (default: false)
+    #[serde(default)]
+    pub require_timestamp: bool,
+
+    /// Timestamp tolerance in seconds (default: 300 = 5 minutes)
+    #[serde(default = "default_timestamp_tolerance")]
+    pub timestamp_tolerance_secs: u64,
+}
+
+impl Default for RequestSigningConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            secret_key: None,
+            signature_header: default_signature_header(),
+            timestamp_header: default_timestamp_header(),
+            require_signature: false,
+            require_timestamp: false,
+            timestamp_tolerance_secs: default_timestamp_tolerance(),
+        }
+    }
+}
+
+fn default_signature_header() -> Option<String> {
+    Some("X-Signature-256".to_string())
+}
+
+fn default_timestamp_header() -> Option<String> {
+    Some("X-Timestamp".to_string())
+}
+
+fn default_timestamp_tolerance() -> u64 {
+    300 // 5 minutes
+}
+
+/// IP-based access control configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpAccessConfig {
+    /// Enable IP-based access control (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// IP allowlist (empty = all allowed unless blocklisted)
+    /// Supports CIDR notation (e.g., "192.168.1.0/24")
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+
+    /// IP blocklist (takes precedence over allowlist)
+    /// Supports CIDR notation (e.g., "10.0.0.0/8")
+    #[serde(default)]
+    pub blocklist: Vec<String>,
+
+    /// Trust X-Forwarded-For and similar headers (default: false)
+    /// Only enable if behind a trusted reverse proxy
+    #[serde(default)]
+    pub trust_proxy_headers: bool,
+}
+
+impl Default for IpAccessConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allowlist: Vec::new(),
+            blocklist: Vec::new(),
+            trust_proxy_headers: false,
+        }
+    }
+}
+
 impl Default for CoalesceConfig {
     fn default() -> Self {
         Self {
@@ -464,6 +680,7 @@ impl Default for Config {
             coalesce: CoalesceConfig::default(),
             error_pages: ErrorPagesConfig::default(),
             connection_pool: ConnectionPoolConfig::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
