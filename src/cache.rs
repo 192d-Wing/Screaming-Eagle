@@ -254,6 +254,64 @@ pub fn generate_cache_key(host: &str, path: &str, query: Option<&str>) -> String
     }
 }
 
+/// Generate a cache key that includes Vary header values (RFC 9111)
+/// This ensures different content variants are cached separately
+pub fn generate_cache_key_with_vary(
+    host: &str,
+    path: &str,
+    query: Option<&str>,
+    vary_header: Option<&str>,
+    request_headers: &std::collections::HashMap<String, String>,
+) -> String {
+    let base_key = generate_cache_key(host, path, query);
+
+    // If no Vary header, use base key
+    let vary = match vary_header {
+        Some(v) => v,
+        None => return base_key,
+    };
+
+    // Handle Vary: * (never cache)
+    if vary.trim() == "*" {
+        return format!("{}|vary=*|{}", base_key, uuid_simple());
+    }
+
+    // Extract relevant request header values based on Vary header
+    let mut vary_values: Vec<String> = Vec::new();
+
+    for header_name in vary.split(',') {
+        let header_name = header_name.trim().to_lowercase();
+        // Skip Vary: * in a list
+        if header_name == "*" {
+            continue;
+        }
+
+        let value = request_headers
+            .get(&header_name)
+            .or_else(|| request_headers.get(&header_name.to_uppercase()))
+            .map(|s| s.as_str())
+            .unwrap_or("");
+
+        vary_values.push(format!("{}={}", header_name, value));
+    }
+
+    if vary_values.is_empty() {
+        base_key
+    } else {
+        format!("{}|vary:{}", base_key, vary_values.join("|"))
+    }
+}
+
+/// Simple UUID-like generator for unique keys (for Vary: *)
+fn uuid_simple() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{:x}", nanos)
+}
+
 pub fn parse_cache_control(header: &str) -> CacheControlDirectives {
     let mut directives = CacheControlDirectives::default();
 
@@ -346,5 +404,56 @@ mod tests {
             generate_cache_key("example.com", "/path", None),
             "example.com/path"
         );
+    }
+
+    #[test]
+    fn test_generate_cache_key_with_vary() {
+        let mut headers = HashMap::new();
+        headers.insert("accept-encoding".to_string(), "gzip, br".to_string());
+        headers.insert("accept-language".to_string(), "en-US".to_string());
+
+        // No Vary header - should return base key
+        assert_eq!(
+            generate_cache_key_with_vary("example.com", "/path", None, None, &headers),
+            "example.com/path"
+        );
+
+        // Single Vary header
+        let key = generate_cache_key_with_vary(
+            "example.com",
+            "/path",
+            None,
+            Some("accept-encoding"),
+            &headers,
+        );
+        assert!(key.contains("example.com/path"));
+        assert!(key.contains("accept-encoding=gzip, br"));
+
+        // Multiple Vary headers
+        let key = generate_cache_key_with_vary(
+            "example.com",
+            "/path",
+            None,
+            Some("accept-encoding, accept-language"),
+            &headers,
+        );
+        assert!(key.contains("accept-encoding=gzip, br"));
+        assert!(key.contains("accept-language=en-US"));
+
+        // Vary header for non-existent request header
+        let key = generate_cache_key_with_vary(
+            "example.com",
+            "/path",
+            None,
+            Some("x-custom-header"),
+            &headers,
+        );
+        assert!(key.contains("x-custom-header="));
+
+        // Vary: * should generate unique key
+        let key1 = generate_cache_key_with_vary("example.com", "/path", None, Some("*"), &headers);
+        let key2 = generate_cache_key_with_vary("example.com", "/path", None, Some("*"), &headers);
+        assert!(key1.contains("vary=*"));
+        assert_ne!(key1, key2); // Each should be unique
     }
 }

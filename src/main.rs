@@ -184,10 +184,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/purge", post(purge_cache))
         .route("/circuit-breakers", get(circuit_breaker_status));
 
-    // CDN routes
+    // CDN routes - support both GET and HEAD methods (RFC 9110)
     let cdn_routes = Router::new()
-        .route("/{origin}/{*path}", get(cdn_handler))
-        .route("/{*path}", get(handlers::root_cdn_handler));
+        .route("/{origin}/{*path}", get(cdn_handler).head(cdn_handler))
+        .route("/{*path}", get(handlers::root_cdn_handler).head(handlers::root_cdn_handler));
 
     // Combine routes
     Router::new()

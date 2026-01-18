@@ -1,12 +1,13 @@
 use axum::{
     body::Body,
     extract::{ConnectInfo, Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use bytes::Bytes;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -15,7 +16,7 @@ use std::time::Instant;
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::cache::{
-    generate_cache_key, parse_cache_control, Cache, CacheEntry, CacheStats, CacheStatus,
+    generate_cache_key_with_vary, parse_cache_control, Cache, CacheEntry, CacheStats, CacheStatus,
 };
 use crate::circuit_breaker::{CircuitBreakerManager, CircuitState};
 use crate::config::Config;
@@ -142,15 +143,17 @@ pub async fn circuit_breaker_status(
     Json(CircuitBreakerStatusResponse { origins })
 }
 
-// Main CDN handler
+// Main CDN handler - supports both GET and HEAD methods
 pub async fn cdn_handler(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    method: Method,
     Path((origin, path)): Path<(String, String)>,
     Query(query): Query<CdnQuery>,
     headers: HeaderMap,
 ) -> Result<Response, CdnError> {
     let start = Instant::now();
+    let is_head_request = method == Method::HEAD;
 
     // Check rate limit
     let client_ip = extract_client_ip(&headers, addr.ip());
@@ -204,8 +207,8 @@ pub async fn cdn_handler(
         )
     };
 
-    // Generate cache key
-    let cache_key = generate_cache_key(&origin, &format!("/{}", path), query_string.as_deref());
+    // Extract request headers for Vary-based cache keying (RFC 9111)
+    let request_headers_map = extract_request_headers(&headers);
 
     // Check request cache control
     let bypass_cache = headers
@@ -218,6 +221,7 @@ pub async fn cdn_handler(
     let response_body;
     let response_headers;
     let response_status;
+    let mut cache_age_secs: Option<u64> = None;
 
     if bypass_cache {
         // Client requested bypass
@@ -231,10 +235,22 @@ pub async fn cdn_handler(
             Err(e) => return Err(e),
         }
     } else {
+        // Generate Vary-aware cache key using common Vary headers (Accept-Encoding)
+        // This ensures different compression variants are cached separately
+        let cache_key = generate_cache_key_with_vary(
+            &origin,
+            &format!("/{}", path),
+            query_string.as_deref(),
+            Some("accept-encoding"), // Default Vary for compression support
+            &request_headers_map,
+        );
+
         // Try cache first
         match state.cache.get(&cache_key) {
             Some((entry, status)) => {
                 cache_status = status;
+                // Calculate Age header value (RFC 9111)
+                cache_age_secs = Some(entry.created_at.elapsed().as_secs());
                 response_body = entry.body;
                 response_headers = entry.headers;
                 response_status = StatusCode::from_u16(entry.status_code).unwrap_or(StatusCode::OK);
@@ -245,7 +261,7 @@ pub async fn cdn_handler(
                     let origin_clone = origin.clone();
                     let path_clone = path.clone();
                     let query_clone = query_string.clone();
-                    let cache_key_clone = cache_key.clone();
+                    let request_headers_clone = request_headers_map.clone();
 
                     tokio::spawn(async move {
                         if let Ok((body, headers, status)) = fetch_from_origin_with_circuit_breaker(
@@ -257,7 +273,16 @@ pub async fn cdn_handler(
                         )
                         .await
                         {
-                            store_in_cache(&state_clone, &cache_key_clone, body, headers, status);
+                            // Generate cache key with actual Vary header from response
+                            let vary_header = headers.get("vary").map(|s| s.as_str());
+                            let final_cache_key = generate_cache_key_with_vary(
+                                &origin_clone,
+                                &format!("/{}", path_clone),
+                                query_clone.as_deref(),
+                                vary_header.or(Some("accept-encoding")),
+                                &request_headers_clone,
+                            );
+                            store_in_cache(&state_clone, &final_cache_key, body, headers, status);
                         }
                     });
                 }
@@ -273,9 +298,18 @@ pub async fn cdn_handler(
 
                         // Store in cache if cacheable
                         if is_cacheable(response_status, &response_headers) {
+                            // Generate cache key with actual Vary header from response (RFC 9111)
+                            let vary_header = response_headers.get("vary").map(|s| s.as_str());
+                            let final_cache_key = generate_cache_key_with_vary(
+                                &origin,
+                                &format!("/{}", path),
+                                query_string.as_deref(),
+                                vary_header.or(Some("accept-encoding")),
+                                &request_headers_map,
+                            );
                             store_in_cache(
                                 &state,
-                                &cache_key,
+                                &final_cache_key,
                                 origin_response.0,
                                 origin_response.1,
                                 response_status,
@@ -294,8 +328,15 @@ pub async fn cdn_handler(
         .metrics
         .record_request(&origin, cache_status, response_status, duration);
 
-    // Build response
-    build_response(response_body, response_headers, response_status, cache_status)
+    // Build response with RFC-compliant headers
+    build_response(
+        response_body,
+        response_headers,
+        response_status,
+        cache_status,
+        cache_age_secs,
+        is_head_request,
+    )
 }
 
 async fn fetch_from_origin_with_circuit_breaker(
@@ -430,6 +471,8 @@ fn build_response(
     headers: HashMap<String, String>,
     status: StatusCode,
     cache_status: CacheStatus,
+    cache_age_secs: Option<u64>,
+    is_head_request: bool,
 ) -> CdnResult<Response> {
     let mut response = Response::builder().status(status);
 
@@ -444,15 +487,40 @@ fn build_response(
     response = response.header("X-Cache", cache_status.as_str());
     response = response.header("X-CDN", "Screaming-Eagle");
 
+    // RFC 9110: Date header - indicates when the message was generated
+    let date = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+    response = response.header(header::DATE, date);
+
+    // RFC 9110: Via header - identifies intermediate proxies
+    response = response.header(header::VIA, format!("1.1 screaming-eagle"));
+
+    // RFC 9111: Age header - indicates time in cache (only for cached responses)
+    if let Some(age) = cache_age_secs {
+        response = response.header(header::AGE, age.to_string());
+    }
+
+    // RFC 9110: Accept-Ranges header - indicate we don't support range requests yet
+    if !headers.contains_key("accept-ranges") {
+        response = response.header(header::ACCEPT_RANGES, "none");
+    }
+
+    // For HEAD requests, return empty body but keep Content-Length from original
+    let body = if is_head_request {
+        Body::empty()
+    } else {
+        Body::from(body)
+    };
+
     response
-        .body(Body::from(body))
+        .body(body)
         .map_err(|e| CdnError::Internal(format!("Failed to build response: {}", e)))
 }
 
-// Catch-all handler for root origin requests
+// Catch-all handler for root origin requests - supports both GET and HEAD
 pub async fn root_cdn_handler(
     State(state): State<Arc<AppState>>,
     connect_info: ConnectInfo<SocketAddr>,
+    method: Method,
     Path(path): Path<String>,
     Query(query): Query<CdnQuery>,
     headers: HeaderMap,
@@ -464,6 +532,7 @@ pub async fn root_cdn_handler(
         return cdn_handler(
             State(state),
             connect_info,
+            method,
             Path((origin, path)),
             Query(query),
             headers,
