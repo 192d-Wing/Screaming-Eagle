@@ -6,6 +6,14 @@ description = "A high-performance CDN written in Rust"
 authors = ["Screaming Eagle Contributors"]
 license = "MIT"
 
+[lib]
+name = "screaming_eagle"
+path = "src/lib.rs"
+
+[[bin]]
+name = "screaming-eagle"
+path = "src/main.rs"
+
 [dependencies]
 # Web framework
 axum = { version = "0.7", features = ["macros"] }
@@ -53,6 +61,12 @@ prometheus = "0.13"
 
 # System info
 num_cpus = "1.16"
+
+# TLS support
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
 
 [profile.release]
 lto = true

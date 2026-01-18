@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -9,6 +9,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use xxhash_rust::xxh3::xxh3_64;
@@ -16,16 +17,20 @@ use xxhash_rust::xxh3::xxh3_64;
 use crate::cache::{
     generate_cache_key, parse_cache_control, Cache, CacheEntry, CacheStats, CacheStatus,
 };
+use crate::circuit_breaker::{CircuitBreakerManager, CircuitState};
 use crate::config::Config;
 use crate::error::{CdnError, CdnResult};
 use crate::metrics::Metrics;
 use crate::origin::OriginFetcher;
+use crate::rate_limit::{RateLimitResult, RateLimiter};
 
 pub struct AppState {
     pub cache: Arc<Cache>,
     pub origin: Arc<OriginFetcher>,
     pub config: Arc<Config>,
     pub metrics: Arc<Metrics>,
+    pub rate_limiter: Arc<RateLimiter>,
+    pub circuit_breaker: Arc<CircuitBreakerManager>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +60,17 @@ pub struct PurgeRequest {
     pub prefix: Option<String>,
     #[serde(default)]
     pub all: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CircuitBreakerStatusResponse {
+    pub origins: Vec<OriginCircuitStatus>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OriginCircuitStatus {
+    pub origin: String,
+    pub state: String,
 }
 
 // Health check endpoint
@@ -105,18 +121,73 @@ pub async fn purge_cache(
     })
 }
 
+// Circuit breaker status endpoint
+pub async fn circuit_breaker_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<CircuitBreakerStatusResponse> {
+    let origins = state
+        .circuit_breaker
+        .all_states()
+        .into_iter()
+        .map(|(origin, state)| OriginCircuitStatus {
+            origin,
+            state: match state {
+                CircuitState::Closed => "closed".to_string(),
+                CircuitState::Open => "open".to_string(),
+                CircuitState::HalfOpen => "half-open".to_string(),
+            },
+        })
+        .collect();
+
+    Json(CircuitBreakerStatusResponse { origins })
+}
+
 // Main CDN handler
 pub async fn cdn_handler(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path((origin, path)): Path<(String, String)>,
     Query(query): Query<CdnQuery>,
     headers: HeaderMap,
 ) -> Result<Response, CdnError> {
     let start = Instant::now();
 
+    // Check rate limit
+    let client_ip = extract_client_ip(&headers, addr.ip());
+    match state.rate_limiter.check(client_ip) {
+        RateLimitResult::Limited { retry_after } => {
+            let mut response = (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("Rate limit exceeded. Retry after {} seconds.", retry_after),
+            )
+                .into_response();
+
+            response
+                .headers_mut()
+                .insert("Retry-After", retry_after.to_string().parse().unwrap());
+            response
+                .headers_mut()
+                .insert("X-RateLimit-Remaining", "0".parse().unwrap());
+
+            return Ok(response);
+        }
+        RateLimitResult::Allowed { remaining, .. } => {
+            // Will add header to response later
+            let _ = remaining;
+        }
+    }
+
     // Validate origin exists
     if !state.origin.has_origin(&origin) {
         return Err(CdnError::NotFound(format!("Unknown origin: {}", origin)));
+    }
+
+    // Check circuit breaker
+    if !state.circuit_breaker.should_allow(&origin) {
+        return Err(CdnError::OriginUnreachable(format!(
+            "Origin {} circuit breaker is open",
+            origin
+        )));
     }
 
     // Build query string
@@ -151,10 +222,14 @@ pub async fn cdn_handler(
     if bypass_cache {
         // Client requested bypass
         cache_status = CacheStatus::Bypass;
-        let origin_response = fetch_from_origin(&state, &origin, &path, query_string.as_deref(), &headers).await?;
-        response_body = origin_response.0;
-        response_headers = origin_response.1;
-        response_status = origin_response.2;
+        match fetch_from_origin_with_circuit_breaker(&state, &origin, &path, query_string.as_deref(), &headers).await {
+            Ok(origin_response) => {
+                response_body = origin_response.0;
+                response_headers = origin_response.1;
+                response_status = origin_response.2;
+            }
+            Err(e) => return Err(e),
+        }
     } else {
         // Try cache first
         match state.cache.get(&cache_key) {
@@ -173,7 +248,7 @@ pub async fn cdn_handler(
                     let cache_key_clone = cache_key.clone();
 
                     tokio::spawn(async move {
-                        if let Ok((body, headers, status)) = fetch_from_origin(
+                        if let Ok((body, headers, status)) = fetch_from_origin_with_circuit_breaker(
                             &state_clone,
                             &origin_clone,
                             &path_clone,
@@ -190,14 +265,24 @@ pub async fn cdn_handler(
             None => {
                 // Cache miss - fetch from origin
                 cache_status = CacheStatus::Miss;
-                let origin_response = fetch_from_origin(&state, &origin, &path, query_string.as_deref(), &headers).await?;
-                response_body = origin_response.0.clone();
-                response_headers = origin_response.1.clone();
-                response_status = origin_response.2;
+                match fetch_from_origin_with_circuit_breaker(&state, &origin, &path, query_string.as_deref(), &headers).await {
+                    Ok(origin_response) => {
+                        response_body = origin_response.0.clone();
+                        response_headers = origin_response.1.clone();
+                        response_status = origin_response.2;
 
-                // Store in cache if cacheable
-                if is_cacheable(response_status, &response_headers) {
-                    store_in_cache(&state, &cache_key, origin_response.0, origin_response.1, response_status);
+                        // Store in cache if cacheable
+                        if is_cacheable(response_status, &response_headers) {
+                            store_in_cache(
+                                &state,
+                                &cache_key,
+                                origin_response.0,
+                                origin_response.1,
+                                response_status,
+                            );
+                        }
+                    }
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -205,10 +290,31 @@ pub async fn cdn_handler(
 
     // Update metrics
     let duration = start.elapsed();
-    state.metrics.record_request(&origin, cache_status, response_status, duration);
+    state
+        .metrics
+        .record_request(&origin, cache_status, response_status, duration);
 
     // Build response
     build_response(response_body, response_headers, response_status, cache_status)
+}
+
+async fn fetch_from_origin_with_circuit_breaker(
+    state: &Arc<AppState>,
+    origin: &str,
+    path: &str,
+    query: Option<&str>,
+    headers: &HeaderMap,
+) -> CdnResult<(Bytes, HashMap<String, String>, StatusCode)> {
+    match fetch_from_origin(state, origin, path, query, headers).await {
+        Ok(result) => {
+            state.circuit_breaker.record_success(origin);
+            Ok(result)
+        }
+        Err(e) => {
+            state.circuit_breaker.record_failure(origin);
+            Err(e)
+        }
+    }
 }
 
 async fn fetch_from_origin(
@@ -237,6 +343,30 @@ fn extract_request_headers(headers: &HeaderMap) -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn extract_client_ip(headers: &HeaderMap, fallback: std::net::IpAddr) -> std::net::IpAddr {
+    // Check X-Forwarded-For header
+    if let Some(forwarded) = headers.get("X-Forwarded-For") {
+        if let Ok(value) = forwarded.to_str() {
+            if let Some(first_ip) = value.split(',').next() {
+                if let Ok(ip) = first_ip.trim().parse() {
+                    return ip;
+                }
+            }
+        }
+    }
+
+    // Check X-Real-IP header
+    if let Some(real_ip) = headers.get("X-Real-IP") {
+        if let Ok(value) = real_ip.to_str() {
+            if let Ok(ip) = value.trim().parse() {
+                return ip;
+            }
+        }
+    }
+
+    fallback
 }
 
 fn is_cacheable(status: StatusCode, headers: &HashMap<String, String>) -> bool {
@@ -275,13 +405,10 @@ fn store_in_cache(
     let now = Instant::now();
 
     // Generate ETag if not present
-    let etag = headers
-        .get("etag")
-        .cloned()
-        .or_else(|| {
-            let hash = xxh3_64(&body);
-            Some(format!("\"{}\"", BASE64.encode(hash.to_be_bytes())))
-        });
+    let etag = headers.get("etag").cloned().or_else(|| {
+        let hash = xxh3_64(&body);
+        Some(format!("\"{}\"", BASE64.encode(hash.to_be_bytes())))
+    });
 
     let entry = CacheEntry {
         size: body.len(),
@@ -325,6 +452,7 @@ fn build_response(
 // Catch-all handler for root origin requests
 pub async fn root_cdn_handler(
     State(state): State<Arc<AppState>>,
+    connect_info: ConnectInfo<SocketAddr>,
     Path(path): Path<String>,
     Query(query): Query<CdnQuery>,
     headers: HeaderMap,
@@ -335,6 +463,7 @@ pub async fn root_cdn_handler(
         let origin = origins[0].to_string();
         return cdn_handler(
             State(state),
+            connect_info,
             Path((origin, path)),
             Query(query),
             headers,

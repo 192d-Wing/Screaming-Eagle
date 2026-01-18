@@ -10,11 +10,15 @@ A high-performance Content Delivery Network written in Rust.
 - **Cache Control**: Respects Cache-Control headers (max-age, s-maxage, no-cache, no-store)
 - **Stale-While-Revalidate**: Serves stale content while refreshing in the background
 - **ETag Generation**: Automatic ETag generation using xxHash for efficient validation
+- **Rate Limiting**: Token bucket rate limiting per client IP
+- **Circuit Breaker**: Automatic origin failure detection and recovery
+- **TLS/HTTPS**: Native TLS support with rustls
 - **Compression**: Gzip and Brotli compression support
 - **CORS**: Built-in CORS handling
 - **Prometheus Metrics**: Comprehensive metrics for monitoring
 - **Cache Purge API**: Purge by key, prefix, or all entries
 - **Graceful Shutdown**: Clean shutdown with in-flight request handling
+- **Docker Support**: Ready-to-use Dockerfile and docker-compose
 
 ## Quick Start
 
@@ -32,6 +36,17 @@ cargo build --release
 
 # With custom config file
 CDN_CONFIG=/path/to/config.toml ./target/release/screaming-eagle
+```
+
+### Docker
+
+```bash
+# Build and run with docker-compose
+docker-compose up -d
+
+# Or build manually
+docker build -t screaming-eagle .
+docker run -p 8080:8080 -v ./config:/app/config screaming-eagle
 ```
 
 ## Configuration
@@ -56,6 +71,24 @@ respect_cache_control = true
 [logging]
 level = "info"
 json_format = false
+
+# Rate limiting
+[rate_limit]
+enabled = true
+requests_per_window = 1000   # Max requests per window
+window_secs = 60             # Window duration
+burst_size = 50              # Burst allowance
+
+# Circuit breaker
+[circuit_breaker]
+failure_threshold = 5        # Failures before opening
+reset_timeout_secs = 30      # Time before half-open
+success_threshold = 3        # Successes to close
+
+# TLS (optional)
+# [tls]
+# cert_path = "/path/to/cert.pem"
+# key_path = "/path/to/key.pem"
 
 # Origin servers
 [origins.myapp]
@@ -109,6 +142,14 @@ GET /_cdn/metrics
 
 Returns metrics in Prometheus format.
 
+### Circuit Breaker Status
+
+```
+GET /_cdn/circuit-breakers
+```
+
+Returns the state of all circuit breakers for each origin.
+
 ### Cache Purge
 
 ```
@@ -131,11 +172,38 @@ The CDN adds these headers to responses:
 
 - `X-Cache`: Cache status (HIT, MISS, STALE, BYPASS)
 - `X-CDN`: CDN identifier (Screaming-Eagle)
+- `X-RateLimit-Remaining`: Remaining requests in window
+- `Retry-After`: Seconds until rate limit resets (when limited)
 
 ## Environment Variables
 
 - `CDN_CONFIG`: Path to configuration file (default: `config/cdn.toml`)
 - `RUST_LOG`: Log level override (e.g., `debug`, `info`, `warn`)
+
+## Rate Limiting
+
+Rate limiting uses a token bucket algorithm:
+
+- Each client IP gets a bucket with `requests_per_window + burst_size` tokens
+- Tokens refill at `requests_per_window / window_secs` per second
+- When bucket is empty, requests return 429 Too Many Requests
+- X-Forwarded-For and X-Real-IP headers are respected for client IP detection
+
+## Circuit Breaker
+
+The circuit breaker protects against cascading failures:
+
+| State | Description |
+|-------|-------------|
+| **Closed** | Normal operation, requests flow to origin |
+| **Open** | Origin marked as failed, requests fail fast |
+| **Half-Open** | Testing recovery, limited requests allowed |
+
+Transitions:
+- Closed → Open: After `failure_threshold` consecutive failures
+- Open → Half-Open: After `reset_timeout_secs` seconds
+- Half-Open → Closed: After `success_threshold` consecutive successes
+- Half-Open → Open: On any failure
 
 ## Metrics
 
@@ -153,6 +221,10 @@ Available Prometheus metrics:
 ```
                     ┌─────────────────┐
                     │   HTTP Client   │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │   Rate Limiter  │
                     └────────┬────────┘
                              │
                     ┌────────▼────────┐
@@ -174,6 +246,10 @@ Available Prometheus metrics:
     └─────────┬─────────┘   │
               │             │
     ┌─────────▼─────────┐   │
+    │ Circuit Breaker   │   │
+    └─────────┬─────────┘   │
+              │             │
+    ┌─────────▼─────────┐   │
     │  Origin Fetcher   │   │
     │   (reqwest)       │   │
     └─────────┬─────────┘   │
@@ -181,6 +257,16 @@ Available Prometheus metrics:
     ┌─────────▼─────────┐   │
     │   Origin Server   │◄──┘
     └───────────────────┘
+```
+
+## Testing
+
+```bash
+# Run all tests
+cargo test
+
+# Run with verbose output
+cargo test -- --nocapture
 ```
 
 ## License

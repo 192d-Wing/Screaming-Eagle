@@ -18,6 +18,15 @@ pub struct Config {
 
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+
+    #[serde(default)]
+    pub circuit_breaker: CircuitBreakerConfig,
+
+    #[serde(default)]
+    pub tls: Option<TlsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +91,42 @@ pub struct LoggingConfig {
     pub json_format: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default = "default_rate_limit_enabled")]
+    pub enabled: bool,
+
+    #[serde(default = "default_requests_per_window")]
+    pub requests_per_window: u32,
+
+    #[serde(default = "default_window_secs")]
+    pub window_secs: u64,
+
+    #[serde(default = "default_burst_size")]
+    pub burst_size: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitBreakerConfig {
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: u32,
+
+    #[serde(default = "default_reset_timeout")]
+    pub reset_timeout_secs: u64,
+
+    #[serde(default = "default_success_threshold")]
+    pub success_threshold: u32,
+
+    #[serde(default = "default_failure_window")]
+    pub failure_window_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    pub cert_path: String,
+    pub key_path: String,
+}
+
 // Default value functions
 fn default_server() -> ServerConfig {
     ServerConfig {
@@ -140,6 +185,40 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
+// Rate limit defaults
+fn default_rate_limit_enabled() -> bool {
+    true
+}
+
+fn default_requests_per_window() -> u32 {
+    1000
+}
+
+fn default_window_secs() -> u64 {
+    60
+}
+
+fn default_burst_size() -> u32 {
+    50
+}
+
+// Circuit breaker defaults
+fn default_failure_threshold() -> u32 {
+    5
+}
+
+fn default_reset_timeout() -> u64 {
+    30
+}
+
+fn default_success_threshold() -> u32 {
+    3
+}
+
+fn default_failure_window() -> u64 {
+    60
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -147,6 +226,9 @@ impl Default for Config {
             cache: CacheConfig::default(),
             origins: HashMap::new(),
             logging: LoggingConfig::default(),
+            rate_limit: RateLimitConfig::default(),
+            circuit_breaker: CircuitBreakerConfig::default(),
+            tls: None,
         }
     }
 }
@@ -169,6 +251,28 @@ impl Default for LoggingConfig {
         Self {
             level: default_log_level(),
             json_format: false,
+        }
+    }
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_rate_limit_enabled(),
+            requests_per_window: default_requests_per_window(),
+            window_secs: default_window_secs(),
+            burst_size: default_burst_size(),
+        }
+    }
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            failure_threshold: default_failure_threshold(),
+            reset_timeout_secs: default_reset_timeout(),
+            success_threshold: default_success_threshold(),
+            failure_window_secs: default_failure_window(),
         }
     }
 }

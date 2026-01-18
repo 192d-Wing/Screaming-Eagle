@@ -18,6 +18,25 @@ respect_cache_control = true
 level = "info"
 json_format = false
 
+# Rate limiting configuration
+[rate_limit]
+enabled = true
+requests_per_window = 1000   # Max requests per window
+window_secs = 60             # Window duration in seconds
+burst_size = 50              # Extra burst allowance
+
+# Circuit breaker configuration
+[circuit_breaker]
+failure_threshold = 5        # Failures before opening circuit
+reset_timeout_secs = 30      # Time before trying half-open
+success_threshold = 3        # Successes to close circuit
+failure_window_secs = 60     # Window for counting failures
+
+# TLS configuration (optional - uncomment to enable HTTPS)
+# [tls]
+# cert_path = "/path/to/cert.pem"
+# key_path = "/path/to/key.pem"
+
 # Origin servers
 # Each origin has a name that's used in the URL path: /<origin-name>/<path>
 

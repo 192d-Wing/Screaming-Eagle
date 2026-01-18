@@ -1,10 +1,3 @@
-mod cache;
-mod config;
-mod error;
-mod handlers;
-mod metrics;
-mod origin;
-
 use axum::{
     routing::{get, post},
     Router,
@@ -22,11 +15,16 @@ use tower_http::{
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use cache::Cache;
-use config::Config;
-use handlers::{cache_stats, cdn_handler, health, metrics as metrics_handler, purge_cache, AppState};
-use metrics::Metrics;
-use origin::OriginFetcher;
+use screaming_eagle::cache::Cache;
+use screaming_eagle::circuit_breaker::{self, CircuitBreakerManager};
+use screaming_eagle::config::{self, Config};
+use screaming_eagle::handlers::{
+    self, cache_stats, cdn_handler, circuit_breaker_status, health, metrics as metrics_handler,
+    purge_cache, AppState,
+};
+use screaming_eagle::metrics::Metrics;
+use screaming_eagle::origin::OriginFetcher;
+use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -41,7 +39,25 @@ async fn main() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION")
     );
 
-    // Initialize components
+    // Initialize rate limiter
+    let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig {
+        requests_per_window: config.rate_limit.requests_per_window,
+        window_secs: config.rate_limit.window_secs,
+        burst_size: config.rate_limit.burst_size,
+        enabled: config.rate_limit.enabled,
+    }));
+
+    // Initialize circuit breaker manager
+    let circuit_breaker = Arc::new(CircuitBreakerManager::new(
+        circuit_breaker::CircuitBreakerConfig {
+            failure_threshold: config.circuit_breaker.failure_threshold,
+            reset_timeout_secs: config.circuit_breaker.reset_timeout_secs,
+            success_threshold: config.circuit_breaker.success_threshold,
+            failure_window_secs: config.circuit_breaker.failure_window_secs,
+        },
+    ));
+
+    // Initialize other components
     let cache = Arc::new(Cache::new(config.cache.clone()));
     let origin = Arc::new(OriginFetcher::new(config.origins.clone())?);
     let metrics = Arc::new(Metrics::new());
@@ -51,6 +67,8 @@ async fn main() -> anyhow::Result<()> {
         origin,
         config: Arc::new(config.clone()),
         metrics,
+        rate_limiter: rate_limiter.clone(),
+        circuit_breaker: circuit_breaker.clone(),
     });
 
     // Start background cache cleanup task
@@ -63,19 +81,67 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Start background rate limiter cleanup task
+    let rate_limiter_clone = rate_limiter.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            rate_limiter_clone.cleanup(Duration::from_secs(600));
+        }
+    });
+
     // Build router
     let app = build_router(state);
 
     // Start server
     let addr: SocketAddr = config.server_addr().parse()?;
-    info!("Listening on {}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
+    // Check for TLS configuration
+    if let Some(ref tls_config) = config.tls {
+        info!("TLS enabled, loading certificates");
+        start_tls_server(addr, app, tls_config).await?;
+    } else {
+        info!("Listening on http://{}", addr);
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    }
 
     info!("Server shutdown complete");
+    Ok(())
+}
+
+async fn start_tls_server(
+    addr: SocketAddr,
+    app: Router,
+    tls_config: &config::TlsConfig,
+) -> anyhow::Result<()> {
+    use axum_server::tls_rustls::RustlsConfig;
+
+    let rustls_config =
+        RustlsConfig::from_pem_file(&tls_config.cert_path, &tls_config.key_path).await?;
+
+    info!("Listening on https://{}", addr);
+
+    let handle = axum_server::Handle::new();
+    let handle_clone = handle.clone();
+
+    // Spawn shutdown handler
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        handle_clone.graceful_shutdown(Some(Duration::from_secs(30)));
+    });
+
+    axum_server::bind_rustls(addr, rustls_config)
+        .handle(handle)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .await?;
+
     Ok(())
 }
 
@@ -93,8 +159,8 @@ fn load_config() -> anyhow::Result<Config> {
 }
 
 fn init_logging(config: &config::LoggingConfig) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
 
     if config.json_format {
         tracing_subscriber::registry()
@@ -110,12 +176,13 @@ fn init_logging(config: &config::LoggingConfig) {
 }
 
 fn build_router(state: Arc<AppState>) -> Router {
-    // API routes
+    // API routes (not rate limited)
     let api_routes = Router::new()
         .route("/health", get(health))
         .route("/stats", get(cache_stats))
         .route("/metrics", get(metrics_handler))
-        .route("/purge", post(purge_cache));
+        .route("/purge", post(purge_cache))
+        .route("/circuit-breakers", get(circuit_breaker_status));
 
     // CDN routes
     let cdn_routes = Router::new()
