@@ -231,11 +231,10 @@ impl OriginFetcher {
         ];
 
         for header_name in forward_headers {
-            if let Some(value) = response.headers().get(&header_name) {
-                if let Ok(v) = value.to_str() {
+            if let Some(value) = response.headers().get(&header_name)
+                && let Ok(v) = value.to_str() {
                     headers.insert(header_name.to_string(), v.to_string());
                 }
-            }
         }
 
         headers

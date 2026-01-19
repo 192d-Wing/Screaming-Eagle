@@ -155,11 +155,10 @@ impl UrlRewriter {
 
         for rule in &self.rules {
             // Check condition if present
-            if let Some(ref condition) = rule.condition {
-                if !self.check_condition(condition, query, method, headers) {
+            if let Some(ref condition) = rule.condition
+                && !self.check_condition(condition, query, method, headers) {
                     continue;
                 }
-            }
 
             // Try to match and replace
             if rule.pattern.is_match(&current_path) {
@@ -201,8 +200,8 @@ impl UrlRewriter {
         }
 
         // Check header condition
-        if let Some(ref header_name) = condition.header {
-            if let Some(ref pattern) = condition.header_pattern {
+        if let Some(ref header_name) = condition.header
+            && let Some(ref pattern) = condition.header_pattern {
                 let header_value = headers
                     .get(header_name)
                     .and_then(|v| v.to_str().ok())
@@ -211,11 +210,10 @@ impl UrlRewriter {
                     return false;
                 }
             }
-        }
 
         // Check query parameter condition
-        if let Some(ref param_name) = condition.query_param {
-            if let Some(ref pattern) = condition.query_pattern {
+        if let Some(ref param_name) = condition.query_param
+            && let Some(ref pattern) = condition.query_pattern {
                 let param_value = query
                     .and_then(|q| {
                         url::form_urlencoded::parse(q.as_bytes())
@@ -227,7 +225,6 @@ impl UrlRewriter {
                     return false;
                 }
             }
-        }
 
         true
     }
@@ -366,8 +363,8 @@ impl HeaderTransformer {
 
         // Apply transformations
         for transform in &self.request_transforms {
-            if let Some(value) = headers.get(&transform.header) {
-                if let Ok(value_str) = value.to_str() {
+            if let Some(value) = headers.get(&transform.header)
+                && let Ok(value_str) = value.to_str() {
                     let new_value = transform
                         .pattern
                         .replace_all(value_str, &transform.replacement);
@@ -375,7 +372,6 @@ impl HeaderTransformer {
                         headers.insert(transform.header.clone(), new_header_value);
                     }
                 }
-            }
         }
     }
 
@@ -393,8 +389,8 @@ impl HeaderTransformer {
 
         // Apply transformations
         for transform in &self.response_transforms {
-            if let Some(value) = headers.get(&transform.header) {
-                if let Ok(value_str) = value.to_str() {
+            if let Some(value) = headers.get(&transform.header)
+                && let Ok(value_str) = value.to_str() {
                     let new_value = transform
                         .pattern
                         .replace_all(value_str, &transform.replacement);
@@ -402,7 +398,6 @@ impl HeaderTransformer {
                         headers.insert(transform.header.clone(), new_header_value);
                     }
                 }
-            }
         }
     }
 }
@@ -787,11 +782,10 @@ impl ConditionalRouter {
                 let weekday = now.format("%w").to_string().parse::<u8>().unwrap_or(0);
                 let hour = now.format("%H").to_string().parse::<u8>().unwrap_or(0);
 
-                if let Some(allowed_days) = days {
-                    if !allowed_days.contains(&weekday) {
+                if let Some(allowed_days) = days
+                    && !allowed_days.contains(&weekday) {
                         return false;
                     }
-                }
 
                 if let (Some(start), Some(end)) = (start_hour, end_hour) {
                     if *start <= *end {

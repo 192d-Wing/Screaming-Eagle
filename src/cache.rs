@@ -318,11 +318,10 @@ impl Cache {
 
         if self.config.hierarchy.enabled {
             // Check L1 first, then L2
-            if let Some(entry) = self.l1_cache.get(key) {
-                if let Some(result) = check_stale(&entry) {
+            if let Some(entry) = self.l1_cache.get(key)
+                && let Some(result) = check_stale(&entry) {
                     return Some(result);
                 }
-            }
 
             if let Some(entry) = self.l2_cache.get(key) {
                 return check_stale(&entry);
@@ -735,7 +734,7 @@ impl Cache {
             for tag in tags {
                 self.tag_to_keys
                     .entry(tag)
-                    .or_insert_with(HashSet::new)
+                    .or_default()
                     .insert(key.to_string());
             }
         };
@@ -753,12 +752,10 @@ impl Cache {
                 updated = true;
                 debug!(key = %key, tier = "L2", tag_count = entry.cache_tags.len(), "Added tags to cache entry");
             }
-        } else {
-            if let Some(mut entry) = self.entries.get_mut(key) {
-                update_tags(&mut entry, tags_to_add.clone());
-                updated = true;
-                debug!(key = %key, tag_count = entry.cache_tags.len(), "Added tags to cache entry");
-            }
+        } else if let Some(mut entry) = self.entries.get_mut(key) {
+            update_tags(&mut entry, tags_to_add.clone());
+            updated = true;
+            debug!(key = %key, tag_count = entry.cache_tags.len(), "Added tags to cache entry");
         }
 
         if !updated {
@@ -972,11 +969,10 @@ pub fn parse_cache_control(header: &str) -> CacheControlDirectives {
             if let Ok(secs) = value.parse() {
                 directives.stale_while_revalidate = Some(secs);
             }
-        } else if let Some(value) = part.strip_prefix("stale-if-error=") {
-            if let Ok(secs) = value.parse() {
+        } else if let Some(value) = part.strip_prefix("stale-if-error=")
+            && let Ok(secs) = value.parse() {
                 directives.stale_if_error = Some(secs);
             }
-        }
     }
 
     directives

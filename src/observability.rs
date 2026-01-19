@@ -784,27 +784,23 @@ pub async fn request_logging_middleware(
 
 fn extract_client_ip(request: &Request<Body>, fallback: String) -> String {
     // Check X-Forwarded-For
-    if let Some(forwarded) = request.headers().get("x-forwarded-for") {
-        if let Ok(value) = forwarded.to_str() {
-            if let Some(first_ip) = value.split(',').next() {
+    if let Some(forwarded) = request.headers().get("x-forwarded-for")
+        && let Ok(value) = forwarded.to_str()
+            && let Some(first_ip) = value.split(',').next() {
                 return first_ip.trim().to_string();
             }
-        }
-    }
 
     // Check X-Real-IP
-    if let Some(real_ip) = request.headers().get("x-real-ip") {
-        if let Ok(value) = real_ip.to_str() {
+    if let Some(real_ip) = request.headers().get("x-real-ip")
+        && let Ok(value) = real_ip.to_str() {
             return value.trim().to_string();
         }
-    }
 
     // Check CF-Connecting-IP (Cloudflare)
-    if let Some(cf_ip) = request.headers().get("cf-connecting-ip") {
-        if let Ok(value) = cf_ip.to_str() {
+    if let Some(cf_ip) = request.headers().get("cf-connecting-ip")
+        && let Ok(value) = cf_ip.to_str() {
             return value.trim().to_string();
         }
-    }
 
     fallback
 }

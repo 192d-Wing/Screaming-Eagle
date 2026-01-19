@@ -40,12 +40,11 @@ impl ErrorPages {
         ];
 
         for (status_code, page_option) in page_configs {
-            if let Some(page_path) = page_option {
-                if let Some(content) = load_error_page(page_path, &config.directory) {
+            if let Some(page_path) = page_option
+                && let Some(content) = load_error_page(page_path, &config.directory) {
                     pages.insert(status_code, content);
                     info!(status_code = status_code, path = %page_path, "Loaded custom error page");
                 }
-            }
         }
 
         // Also try to auto-discover error pages in the directory
@@ -59,12 +58,11 @@ impl ErrorPages {
                 let filename = format!("{}.html", status_code);
                 let filepath = Path::new(&config.directory).join(&filename);
 
-                if filepath.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&filepath) {
+                if filepath.exists()
+                    && let Ok(content) = std::fs::read_to_string(&filepath) {
                         pages.insert(status_code, content);
                         info!(status_code = status_code, path = ?filepath, "Auto-discovered custom error page");
                     }
-                }
             }
         }
 

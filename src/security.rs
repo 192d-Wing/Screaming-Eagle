@@ -64,18 +64,16 @@ pub async fn security_headers_middleware(
     let config = &security.config.headers;
 
     // Content-Security-Policy
-    if let Some(ref csp) = config.content_security_policy {
-        if let Ok(value) = HeaderValue::from_str(csp) {
+    if let Some(ref csp) = config.content_security_policy
+        && let Ok(value) = HeaderValue::from_str(csp) {
             headers.insert("content-security-policy", value);
         }
-    }
 
     // X-Frame-Options
-    if let Some(ref xfo) = config.x_frame_options {
-        if let Ok(value) = HeaderValue::from_str(xfo) {
+    if let Some(ref xfo) = config.x_frame_options
+        && let Ok(value) = HeaderValue::from_str(xfo) {
             headers.insert("x-frame-options", value);
         }
-    }
 
     // X-Content-Type-Options
     if config.x_content_type_options {
@@ -86,53 +84,46 @@ pub async fn security_headers_middleware(
     }
 
     // X-XSS-Protection
-    if let Some(ref xxss) = config.x_xss_protection {
-        if let Ok(value) = HeaderValue::from_str(xxss) {
+    if let Some(ref xxss) = config.x_xss_protection
+        && let Ok(value) = HeaderValue::from_str(xxss) {
             headers.insert("x-xss-protection", value);
         }
-    }
 
     // Strict-Transport-Security (HSTS)
-    if let Some(ref hsts) = config.strict_transport_security {
-        if let Ok(value) = HeaderValue::from_str(hsts) {
+    if let Some(ref hsts) = config.strict_transport_security
+        && let Ok(value) = HeaderValue::from_str(hsts) {
             headers.insert("strict-transport-security", value);
         }
-    }
 
     // Referrer-Policy
-    if let Some(ref rp) = config.referrer_policy {
-        if let Ok(value) = HeaderValue::from_str(rp) {
+    if let Some(ref rp) = config.referrer_policy
+        && let Ok(value) = HeaderValue::from_str(rp) {
             headers.insert("referrer-policy", value);
         }
-    }
 
     // Permissions-Policy
-    if let Some(ref pp) = config.permissions_policy {
-        if let Ok(value) = HeaderValue::from_str(pp) {
+    if let Some(ref pp) = config.permissions_policy
+        && let Ok(value) = HeaderValue::from_str(pp) {
             headers.insert("permissions-policy", value);
         }
-    }
 
     // Cross-Origin-Embedder-Policy
-    if let Some(ref coep) = config.cross_origin_embedder_policy {
-        if let Ok(value) = HeaderValue::from_str(coep) {
+    if let Some(ref coep) = config.cross_origin_embedder_policy
+        && let Ok(value) = HeaderValue::from_str(coep) {
             headers.insert("cross-origin-embedder-policy", value);
         }
-    }
 
     // Cross-Origin-Opener-Policy
-    if let Some(ref coop) = config.cross_origin_opener_policy {
-        if let Ok(value) = HeaderValue::from_str(coop) {
+    if let Some(ref coop) = config.cross_origin_opener_policy
+        && let Ok(value) = HeaderValue::from_str(coop) {
             headers.insert("cross-origin-opener-policy", value);
         }
-    }
 
     // Cross-Origin-Resource-Policy
-    if let Some(ref corp) = config.cross_origin_resource_policy {
-        if let Ok(value) = HeaderValue::from_str(corp) {
+    if let Some(ref corp) = config.cross_origin_resource_policy
+        && let Ok(value) = HeaderValue::from_str(corp) {
             headers.insert("cross-origin-resource-policy", value);
         }
-    }
 
     // Remove server header if configured
     if config.remove_server_header {
@@ -336,11 +327,10 @@ fn is_ip_in_list(ip: &IpAddr, list: &[String]) -> bool {
     for entry in list {
         if entry.contains('/') {
             // CIDR notation - parse and check
-            if let Some(matched) = check_cidr(ip, entry) {
-                if matched {
+            if let Some(matched) = check_cidr(ip, entry)
+                && matched {
                     return true;
                 }
-            }
         } else if &ip_str == entry {
             return true;
         }
@@ -397,33 +387,26 @@ fn extract_client_ip(request: &Request<Body>, fallback: IpAddr, trust_proxy: boo
     }
 
     // Check X-Forwarded-For header
-    if let Some(forwarded) = request.headers().get("X-Forwarded-For") {
-        if let Ok(value) = forwarded.to_str() {
-            if let Some(first_ip) = value.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse() {
+    if let Some(forwarded) = request.headers().get("X-Forwarded-For")
+        && let Ok(value) = forwarded.to_str()
+            && let Some(first_ip) = value.split(',').next()
+                && let Ok(ip) = first_ip.trim().parse() {
                     return ip;
                 }
-            }
-        }
-    }
 
     // Check X-Real-IP header
-    if let Some(real_ip) = request.headers().get("X-Real-IP") {
-        if let Ok(value) = real_ip.to_str() {
-            if let Ok(ip) = value.trim().parse() {
+    if let Some(real_ip) = request.headers().get("X-Real-IP")
+        && let Ok(value) = real_ip.to_str()
+            && let Ok(ip) = value.trim().parse() {
                 return ip;
             }
-        }
-    }
 
     // Check CF-Connecting-IP (Cloudflare)
-    if let Some(cf_ip) = request.headers().get("CF-Connecting-IP") {
-        if let Ok(value) = cf_ip.to_str() {
-            if let Ok(ip) = value.trim().parse() {
+    if let Some(cf_ip) = request.headers().get("CF-Connecting-IP")
+        && let Ok(value) = cf_ip.to_str()
+            && let Ok(ip) = value.trim().parse() {
                 return ip;
             }
-        }
-    }
 
     fallback
 }

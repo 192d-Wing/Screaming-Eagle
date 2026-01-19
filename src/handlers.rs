@@ -720,24 +720,19 @@ fn extract_request_headers(headers: &HeaderMap) -> HashMap<String, String> {
 
 fn extract_client_ip(headers: &HeaderMap, fallback: std::net::IpAddr) -> std::net::IpAddr {
     // Check X-Forwarded-For header
-    if let Some(forwarded) = headers.get("X-Forwarded-For") {
-        if let Ok(value) = forwarded.to_str() {
-            if let Some(first_ip) = value.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse() {
+    if let Some(forwarded) = headers.get("X-Forwarded-For")
+        && let Ok(value) = forwarded.to_str()
+            && let Some(first_ip) = value.split(',').next()
+                && let Ok(ip) = first_ip.trim().parse() {
                     return ip;
                 }
-            }
-        }
-    }
 
     // Check X-Real-IP header
-    if let Some(real_ip) = headers.get("X-Real-IP") {
-        if let Ok(value) = real_ip.to_str() {
-            if let Ok(ip) = value.trim().parse() {
+    if let Some(real_ip) = headers.get("X-Real-IP")
+        && let Ok(value) = real_ip.to_str()
+            && let Ok(ip) = value.trim().parse() {
                 return ip;
             }
-        }
-    }
 
     fallback
 }

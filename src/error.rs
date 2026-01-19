@@ -80,8 +80,8 @@ impl IntoResponse for CdnError {
         let message = self.message().to_string();
 
         // Check if we have custom error pages enabled
-        if let Some(error_pages) = get_error_pages() {
-            if error_pages.is_enabled() {
+        if let Some(error_pages) = get_error_pages()
+            && error_pages.is_enabled() {
                 // Try to render custom error page
                 if let Some(html) = error_pages.render_page(status, &message) {
                     return (
@@ -101,7 +101,6 @@ impl IntoResponse for CdnError {
                 )
                     .into_response();
             }
-        }
 
         // Default JSON error response
         let body = Json(json!({
