@@ -9,20 +9,23 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ## Applicable RFCs
 
 ### Core HTTP Standards
+
 | RFC | Title | Relevance |
-|-----|-------|-----------|
+| ----- | ------- | ----------- |
 | RFC 9110 | HTTP Semantics | Core HTTP behavior, methods, headers, status codes |
 | RFC 9111 | HTTP Caching | Cache storage, validation, expiration |
 | RFC 9112 | HTTP/1.1 | Message syntax and routing |
 
 ### Caching Extensions
+
 | RFC | Title | Relevance |
-|-----|-------|-----------|
+| ----- | ------- | ----------- |
 | RFC 5861 | HTTP Cache-Control Extensions for Stale Content | stale-while-revalidate, stale-if-error |
 
 ### Related Standards
+
 | RFC | Title | Relevance |
-|-----|-------|-----------|
+| ----- | ------- | ----------- |
 | RFC 7239 | Forwarded HTTP Extension | Client IP forwarding |
 | RFC 8446 | TLS 1.3 | HTTPS support |
 | RFC 6648 | Deprecating X- Prefix | Custom header naming |
@@ -34,7 +37,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 8.4 - Content Codings (Compression)
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | Support gzip content-coding | COMPLIANT | `tower-http` CompressionLayer; reqwest client decompression |
 | Support deflate content-coding | PARTIAL | Not explicitly enabled |
 | Support br (Brotli) content-coding | COMPLIANT | Enabled in both server and client |
@@ -44,7 +47,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 8.8 - Validators
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | ETag generation | COMPLIANT | Auto-generated using xxHash3 if not from origin |
 | ETag forwarding from origin | COMPLIANT | Preserved in cache entries |
 | Last-Modified forwarding | COMPLIANT | Extracted and stored from origin |
@@ -55,7 +58,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 9 - Methods
 
 | Method | Status | Notes |
-|--------|--------|-------|
+| -------- | -------- | ------- |
 | GET | COMPLIANT | Primary method for CDN content |
 | HEAD | COMPLIANT | Returns headers without body, implemented via Method extractor |
 | POST | PARTIAL | Only for admin API, not proxied |
@@ -66,7 +69,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 10 - Message Context
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | Host header handling | COMPLIANT | Configurable per-origin host_header |
 | Date header | COMPLIANT | Added via `build_response()` using chrono UTC formatting |
 | Via header | COMPLIANT | Added `Via: 1.1 screaming-eagle` to all responses |
@@ -74,7 +77,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 12 - Content Negotiation
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | Accept header forwarding | COMPLIANT | Forwarded to origin |
 | Accept-Encoding handling | COMPLIANT | Handled by compression layer |
 | Accept-Language forwarding | COMPLIANT | Forwarded to origin |
@@ -83,7 +86,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 13 - Conditional Requests
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | If-None-Match handling | COMPLIANT | Forwarded to origin |
 | If-Modified-Since handling | COMPLIANT | Forwarded to origin |
 | 304 Not Modified responses | COMPLIANT | Recognized and handled |
@@ -93,7 +96,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 14 - Range Requests
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | Range header parsing | COMPLIANT | Parsed via `parse_range_header()` in range module |
 | Accept-Ranges header | COMPLIANT | Returns `bytes` on all responses |
 | Content-Range header | COMPLIANT | Included in 206 responses |
@@ -105,7 +108,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 15 - Status Codes
 
 | Status Code | Status | Usage |
-|-------------|--------|-------|
+| ------------- | -------- | ------- |
 | 200 OK | COMPLIANT | Successful responses |
 | 206 Partial Content | COMPLIANT | Range request responses |
 | 304 Not Modified | COMPLIANT | Conditional request validation |
@@ -124,7 +127,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 3 - Storing Responses in Caches
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | Store responses with explicit freshness | COMPLIANT | max-age, s-maxage respected |
 | Respect no-store directive | COMPLIANT | Content not cached |
 | Respect private directive | COMPLIANT | Content not cached in shared cache |
@@ -135,7 +138,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 4 - Constructing Responses from Caches
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | Serve fresh responses | COMPLIANT | TTL-based freshness |
 | Validate stale responses | COMPLIANT | Conditional requests sent |
 | Age header calculation | COMPLIANT | Added to cached responses via `cache_age_secs` calculation |
@@ -146,7 +149,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 #### Cache-Control Directives
 
 | Directive | Status | Implementation |
-|-----------|--------|----------------|
+| ----------- | -------- | ---------------- |
 | max-age | COMPLIANT | Parsed and used for TTL |
 | s-maxage | COMPLIANT | Takes precedence for shared cache |
 | no-cache | COMPLIANT | Forces revalidation |
@@ -165,7 +168,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ### Section 5.2.2.6 - Stale Responses
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | Serve stale on origin failure | COMPLIANT | Via stale-while-revalidate and stale-if-error |
 | stale-if-error handling | COMPLIANT | Serves stale on 5xx and connection errors (RFC 5861) |
 
@@ -174,7 +177,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ## RFC 5861 - Cache-Control Extensions for Stale Content
 
 | Directive | Status | Implementation |
-|-----------|--------|----------------|
+| ----------- | -------- | ---------------- |
 | stale-while-revalidate | COMPLIANT | Background revalidation during stale window |
 | stale-if-error | COMPLIANT | Serves stale content on 5xx errors and connection failures |
 
@@ -185,7 +188,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ## RFC 7239 - Forwarded HTTP Extension
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | Forwarded header support | NOT IMPLEMENTED | Uses X-Forwarded-For instead |
 | X-Forwarded-For parsing | COMPLIANT | First IP extracted |
 | X-Real-IP parsing | COMPLIANT | Fallback if X-Forwarded-For missing |
@@ -197,7 +200,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ## RFC 8446 - TLS 1.3
 
 | Requirement | Status | Implementation |
-|-------------|--------|----------------|
+| ------------- | -------- | ---------------- |
 | TLS 1.3 support | COMPLIANT | Via rustls |
 | Certificate configuration | COMPLIANT | cert_path, key_path in config |
 | Graceful TLS termination | COMPLIANT | axum-server with graceful shutdown |
@@ -207,6 +210,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ## Compliance Summary
 
 ### Fully Compliant
+
 - Cache-Control parsing (core directives)
 - ETag generation and forwarding
 - Conditional requests (If-None-Match, If-Modified-Since)
@@ -224,11 +228,13 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 - **stale-if-error** (RFC 5861) - Serves stale on 5xx and connection errors
 
 ### Partially Compliant
+
 - must-revalidate (parsed but not strictly enforced)
 - Status code caching (only 200 range)
 - Multi-range requests (serves full content instead of multipart)
 
 ### Not Implemented
+
 - Forwarded header (RFC 7239)
 - no-transform directive
 
@@ -254,34 +260,34 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 
 ### Medium Priority (Improved Compliance)
 
-4. ~~**Vary Header Cache Keying**~~ ✅ IMPLEMENTED
+1. ~~**Vary Header Cache Keying**~~ ✅ IMPLEMENTED
    - ~~Include Vary header values in cache key~~
    - ~~Prevent serving wrong content variants~~
 
-5. ~~**Date Header**~~ ✅ IMPLEMENTED
+2. ~~**Date Header**~~ ✅ IMPLEMENTED
    - ~~Add Date header to all responses~~
    - ~~Use response generation time~~
 
-6. ~~**Via Header**~~ ✅ IMPLEMENTED
+3. ~~**Via Header**~~ ✅ IMPLEMENTED
    - ~~Add Via: 1.1 screaming-eagle~~
    - ~~Identify proxy in request chain~~
 
-7. ~~**stale-if-error**~~ ✅ IMPLEMENTED
+4. ~~**stale-if-error**~~ ✅ IMPLEMENTED
    - ~~Serve stale content on 5xx origin errors~~
    - ~~Improve availability during outages~~
 
 ### Low Priority (Full Compliance)
 
-8. **must-revalidate Enforcement**
+1. **must-revalidate Enforcement**
    - Never serve stale without validation when set
 
-9. **Cacheable Error Responses**
+2. **Cacheable Error Responses**
    - Cache 404, 410 if explicitly cacheable
 
-10. **Forwarded Header (RFC 7239)**
+3. **Forwarded Header (RFC 7239)**
     - Parse and generate standard Forwarded header
 
-11. **Multi-range Requests**
+4. **Multi-range Requests**
     - Return multipart/byteranges for multiple ranges
 
 ---
@@ -305,7 +311,7 @@ This document outlines the RFC standards applicable to the Screaming Eagle CDN a
 ## Version History
 
 | Version | Date | Changes |
-|---------|------|---------|
+| --------- | ------ | --------- |
 | 1.0 | 2026-01-18 | Initial compliance assessment |
 | 1.1 | 2026-01-18 | Implemented HEAD method, Age/Date/Via headers, Vary-based cache keying |
 | 1.2 | 2026-01-18 | Implemented Range requests (206, 416), stale-if-error (RFC 5861) |
