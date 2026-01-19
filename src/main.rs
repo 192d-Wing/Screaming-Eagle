@@ -21,20 +21,20 @@ use screaming_eagle::cache::Cache;
 use screaming_eagle::circuit_breaker::{self, CircuitBreakerManager};
 use screaming_eagle::coalesce::RequestCoalescer;
 use screaming_eagle::config::{self, Config};
+use screaming_eagle::edge::{edge_processing_middleware, EdgeProcessor};
 use screaming_eagle::error::init_error_pages;
 use screaming_eagle::error_pages::ErrorPages;
 use screaming_eagle::handlers::{
     self, cache_stats, cdn_handler, circuit_breaker_status, coalesce_stats, health,
     metrics as metrics_handler, origin_health_status, purge_cache, warm_cache, AppState,
 };
-use screaming_eagle::health::{HealthChecker, spawn_health_checks};
+use screaming_eagle::health::{spawn_health_checks, HealthChecker};
 use screaming_eagle::metrics::Metrics;
 use screaming_eagle::origin::OriginFetcher;
 use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter};
 use screaming_eagle::security::{
     ip_access_control_middleware, request_signing_middleware, security_headers_middleware, Security,
 };
-use screaming_eagle::edge::{edge_processing_middleware, EdgeProcessor};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -86,7 +86,10 @@ async fn main() -> anyhow::Result<()> {
     let coalescer = Arc::new(RequestCoalescer::new(config.coalesce.max_waiters));
 
     if config.coalesce.enabled {
-        info!("Request coalescing enabled (max {} waiters)", config.coalesce.max_waiters);
+        info!(
+            "Request coalescing enabled (max {} waiters)",
+            config.coalesce.max_waiters
+        );
     }
 
     let state = Arc::new(AppState {
@@ -154,7 +157,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Build router
-    let app = build_router(state, admin_auth, security, edge_processor, config.edge.enabled);
+    let app = build_router(
+        state,
+        admin_auth,
+        security,
+        edge_processor,
+        config.edge.enabled,
+    );
 
     // Start server
     let addr: SocketAddr = config.server_addr().parse()?;
@@ -273,7 +282,10 @@ fn build_router(
     // CDN routes - support both GET and HEAD methods (RFC 9110)
     let cdn_routes = Router::new()
         .route("/{origin}/{*path}", get(cdn_handler).head(cdn_handler))
-        .route("/{*path}", get(handlers::root_cdn_handler).head(handlers::root_cdn_handler));
+        .route(
+            "/{*path}",
+            get(handlers::root_cdn_handler).head(handlers::root_cdn_handler),
+        );
 
     // Build router with middleware layers
     let mut router = Router::new()

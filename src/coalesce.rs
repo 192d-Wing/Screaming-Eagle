@@ -69,7 +69,9 @@ impl RequestCoalescer {
     /// Get statistics about current in-flight requests
     pub fn stats(&self) -> CoalesceStats {
         let in_flight_count = self.inner.in_flight.len();
-        let total_waiters: usize = self.inner.in_flight
+        let total_waiters: usize = self
+            .inner
+            .in_flight
             .iter()
             .map(|entry| entry.value().receiver_count())
             .sum();

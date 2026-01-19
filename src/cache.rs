@@ -51,7 +51,7 @@ pub struct CacheStats {
     pub evictions: u64,
     pub stale_hits: u64,
     pub avg_entry_size_bytes: usize,
-    pub hot_entries: usize,  // Entries with access_count > threshold
+    pub hot_entries: usize, // Entries with access_count > threshold
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +94,10 @@ impl Cache {
         let shard_count = (num_cpus::get() * 4).next_power_of_two();
         let entries = DashMap::with_capacity_and_shard_amount(10000, shard_count);
 
-        info!(shards = shard_count, "Initialized cache with {} shards", shard_count);
+        info!(
+            shards = shard_count,
+            "Initialized cache with {} shards", shard_count
+        );
 
         Self {
             entries,
@@ -183,7 +186,8 @@ impl Cache {
 
         // Update size tracking
         if let Some(old_entry) = self.entries.get(&key) {
-            self.current_size.fetch_sub(old_entry.size, Ordering::Relaxed);
+            self.current_size
+                .fetch_sub(old_entry.size, Ordering::Relaxed);
         }
 
         self.current_size.fetch_add(entry_size, Ordering::Relaxed);
@@ -491,7 +495,8 @@ impl CacheControlDirectives {
 
     pub fn ttl(&self, default_ttl: Duration, max_ttl: Duration) -> Duration {
         // s-maxage takes precedence for shared caches (CDN)
-        let ttl_secs = self.s_maxage
+        let ttl_secs = self
+            .s_maxage
             .or(self.max_age)
             .map(Duration::from_secs)
             .unwrap_or(default_ttl);

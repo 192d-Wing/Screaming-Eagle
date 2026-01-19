@@ -92,9 +92,10 @@ impl RateLimiter {
         let max_tokens = self.config.requests_per_window as f64 + self.config.burst_size as f64;
         let refill_rate = self.config.requests_per_window as f64 / self.config.window_secs as f64;
 
-        let mut bucket = self.buckets.entry(ip).or_insert_with(|| {
-            TokenBucket::new(max_tokens, refill_rate)
-        });
+        let mut bucket = self
+            .buckets
+            .entry(ip)
+            .or_insert_with(|| TokenBucket::new(max_tokens, refill_rate));
 
         if bucket.try_consume(1.0) {
             let remaining = bucket.tokens_available() as u32;
@@ -122,9 +123,8 @@ impl RateLimiter {
     /// Clean up old entries that haven't been used recently
     pub fn cleanup(&self, max_age: Duration) {
         let now = Instant::now();
-        self.buckets.retain(|_, bucket| {
-            now.duration_since(bucket.last_update) < max_age
-        });
+        self.buckets
+            .retain(|_, bucket| now.duration_since(bucket.last_update) < max_age);
     }
 }
 

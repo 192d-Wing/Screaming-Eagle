@@ -19,7 +19,7 @@ use crate::cache::{
     generate_cache_key_with_vary, parse_cache_control, Cache, CacheEntry, CacheStats, CacheStatus,
 };
 use crate::circuit_breaker::{CircuitBreakerManager, CircuitState};
-use crate::coalesce::{AcquireResult, CoalescedResponse, CoalesceStats, RequestCoalescer};
+use crate::coalesce::{AcquireResult, CoalesceStats, CoalescedResponse, RequestCoalescer};
 use crate::config::Config;
 use crate::error::{CdnError, CdnResult};
 use crate::health::{HealthChecker, OriginHealth};
@@ -193,9 +193,7 @@ pub async fn origin_health_status(
 }
 
 // Coalesce statistics endpoint
-pub async fn coalesce_stats(
-    State(state): State<Arc<AppState>>,
-) -> Json<CoalesceStatsResponse> {
+pub async fn coalesce_stats(State(state): State<Arc<AppState>>) -> Json<CoalesceStatsResponse> {
     Json(CoalesceStatsResponse {
         enabled: state.coalesce_enabled,
         stats: state.coalescer.stats(),
@@ -416,7 +414,15 @@ pub async fn cdn_handler(
     if bypass_cache {
         // Client requested bypass
         cache_status = CacheStatus::Bypass;
-        match fetch_from_origin_with_circuit_breaker(&state, &origin, &path, query_string.as_deref(), &headers).await {
+        match fetch_from_origin_with_circuit_breaker(
+            &state,
+            &origin,
+            &path,
+            query_string.as_deref(),
+            &headers,
+        )
+        .await
+        {
             Ok(origin_response) => {
                 response_body = origin_response.0;
                 response_headers = origin_response.1;
@@ -486,7 +492,15 @@ pub async fn cdn_handler(
                     match state.coalescer.try_acquire(&cache_key) {
                         AcquireResult::Fetch(guard) => {
                             // We are the leader - fetch from origin
-                            match fetch_from_origin_with_circuit_breaker(&state, &origin, &path, query_string.as_deref(), &headers).await {
+                            match fetch_from_origin_with_circuit_breaker(
+                                &state,
+                                &origin,
+                                &path,
+                                query_string.as_deref(),
+                                &headers,
+                            )
+                            .await
+                            {
                                 Ok((body, hdrs, status)) => {
                                     // Complete the coalesce to notify waiters
                                     guard.complete(CoalescedResponse {
@@ -513,13 +527,22 @@ pub async fn cdn_handler(
                                     Ok((coalesced.body, coalesced.headers, status))
                                 }
                                 Ok(Err(err)) => Err(CdnError::OriginError(err)),
-                                Err(_) => Err(CdnError::Internal("Coalesced request was cancelled".to_string())),
+                                Err(_) => Err(CdnError::Internal(
+                                    "Coalesced request was cancelled".to_string(),
+                                )),
                             }
                         }
                     }
                 } else {
                     // Coalescing disabled - direct fetch
-                    fetch_from_origin_with_circuit_breaker(&state, &origin, &path, query_string.as_deref(), &headers).await
+                    fetch_from_origin_with_circuit_breaker(
+                        &state,
+                        &origin,
+                        &path,
+                        query_string.as_deref(),
+                        &headers,
+                    )
+                    .await
                 };
 
                 match fetch_result {
@@ -532,7 +555,8 @@ pub async fn cdn_handler(
                                 cache_age_secs = Some(stale_entry.created_at.elapsed().as_secs());
                                 response_body = stale_entry.body;
                                 response_headers = stale_entry.headers;
-                                response_status = StatusCode::from_u16(stale_entry.status_code).unwrap_or(StatusCode::OK);
+                                response_status = StatusCode::from_u16(stale_entry.status_code)
+                                    .unwrap_or(StatusCode::OK);
                                 tracing::info!(
                                     origin = %origin,
                                     path = %path,
@@ -578,7 +602,8 @@ pub async fn cdn_handler(
                             cache_age_secs = Some(stale_entry.created_at.elapsed().as_secs());
                             response_body = stale_entry.body;
                             response_headers = stale_entry.headers;
-                            response_status = StatusCode::from_u16(stale_entry.status_code).unwrap_or(StatusCode::OK);
+                            response_status = StatusCode::from_u16(stale_entry.status_code)
+                                .unwrap_or(StatusCode::OK);
                             tracing::info!(
                                 origin = %origin,
                                 path = %path,

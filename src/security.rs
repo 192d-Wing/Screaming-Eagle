@@ -189,13 +189,14 @@ pub async fn request_signing_middleware(
     };
 
     // Extract timestamp if required
-    let timestamp_header = config
-        .timestamp_header
-        .as_deref()
-        .unwrap_or("X-Timestamp");
+    let timestamp_header = config.timestamp_header.as_deref().unwrap_or("X-Timestamp");
 
     if config.require_timestamp {
-        match validate_timestamp(request.headers(), timestamp_header, config.timestamp_tolerance_secs) {
+        match validate_timestamp(
+            request.headers(),
+            timestamp_header,
+            config.timestamp_tolerance_secs,
+        ) {
             Ok(()) => {}
             Err(msg) => {
                 return (StatusCode::UNAUTHORIZED, msg).into_response();
@@ -433,11 +434,17 @@ fn extract_client_ip(request: &Request<Body>, fallback: IpAddr, trust_proxy: boo
 }
 
 /// Generate HMAC signature for a request (utility for clients)
-pub fn generate_signature(secret: &str, method: &str, path: &str, query: &str, timestamp: u64) -> String {
+pub fn generate_signature(
+    secret: &str,
+    method: &str,
+    path: &str,
+    query: &str,
+    timestamp: u64,
+) -> String {
     let string_to_sign = format!("{}\n{}\n{}\n{}", method, path, query, timestamp);
 
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(string_to_sign.as_bytes());
 
     let result = mac.finalize();
@@ -469,10 +476,7 @@ mod tests {
     #[test]
     fn test_is_ip_in_list() {
         let ip: IpAddr = "192.168.1.100".parse().unwrap();
-        let list = vec![
-            "10.0.0.1".to_string(),
-            "192.168.1.0/24".to_string(),
-        ];
+        let list = vec!["10.0.0.1".to_string(), "192.168.1.0/24".to_string()];
 
         assert!(is_ip_in_list(&ip, &list));
 
@@ -491,7 +495,11 @@ mod tests {
         let expected_hex = hex::encode(mac.finalize().into_bytes());
 
         assert!(verify_hmac_signature(secret, message, &expected_hex));
-        assert!(verify_hmac_signature(secret, message, &format!("sha256={}", expected_hex)));
+        assert!(verify_hmac_signature(
+            secret,
+            message,
+            &format!("sha256={}", expected_hex)
+        ));
         assert!(!verify_hmac_signature(secret, message, "invalid"));
     }
 

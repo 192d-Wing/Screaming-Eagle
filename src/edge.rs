@@ -15,9 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tracing::{debug, instrument, warn};
 
-use crate::config::{
-    EdgeConfig as ConfigEdgeConfig, RoutingActionConfig, RoutingConditionConfig,
-};
+use crate::config::{EdgeConfig as ConfigEdgeConfig, RoutingActionConfig, RoutingConditionConfig};
 
 /// Edge processing configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,18 +129,12 @@ impl UrlRewriter {
                     }
                 };
 
-                let condition = rule.condition.as_ref().map(|c| {
-                    CompiledCondition {
-                        header: c.header.clone(),
-                        header_pattern: c.header_pattern.as_ref().and_then(|p| Regex::new(p).ok()),
-                        query_param: c.query_param.clone(),
-                        query_pattern: c.query_pattern.as_ref().and_then(|p| Regex::new(p).ok()),
-                        methods: c
-                            .methods
-                            .iter()
-                            .filter_map(|m| m.parse().ok())
-                            .collect(),
-                    }
+                let condition = rule.condition.as_ref().map(|c| CompiledCondition {
+                    header: c.header.clone(),
+                    header_pattern: c.header_pattern.as_ref().and_then(|p| Regex::new(p).ok()),
+                    query_param: c.query_param.clone(),
+                    query_pattern: c.query_pattern.as_ref().and_then(|p| Regex::new(p).ok()),
+                    methods: c.methods.iter().filter_map(|m| m.parse().ok()).collect(),
                 });
 
                 Some(CompiledRewriteRule {
@@ -155,7 +147,9 @@ impl UrlRewriter {
             })
             .collect();
 
-        Self { rules: compiled_rules }
+        Self {
+            rules: compiled_rules,
+        }
     }
 
     /// Rewrite a URL path based on configured rules
@@ -636,7 +630,10 @@ pub enum RoutingAction {
 
     /// Block the request
     #[serde(rename = "block")]
-    Block { status: u16, message: Option<String> },
+    Block {
+        status: u16,
+        message: Option<String>,
+    },
 }
 
 /// Compiled routing rule
@@ -690,14 +687,16 @@ impl ConditionalRouter {
             })
             .collect();
 
-        Self { rules: compiled_rules }
+        Self {
+            rules: compiled_rules,
+        }
     }
 
     fn compile_condition(condition: RoutingCondition) -> Option<CompiledRoutingCondition> {
         match condition {
-            RoutingCondition::Path { pattern } => {
-                Regex::new(&pattern).ok().map(CompiledRoutingCondition::Path)
-            }
+            RoutingCondition::Path { pattern } => Regex::new(&pattern)
+                .ok()
+                .map(CompiledRoutingCondition::Path),
             RoutingCondition::Header { name, pattern } => Regex::new(&pattern)
                 .ok()
                 .map(|r| CompiledRoutingCondition::Header(name, r)),
@@ -705,15 +704,10 @@ impl ConditionalRouter {
                 .ok()
                 .map(|r| CompiledRoutingCondition::Query(param, r)),
             RoutingCondition::Method { methods } => {
-                let parsed: Vec<Method> = methods
-                    .iter()
-                    .filter_map(|m| m.parse().ok())
-                    .collect();
+                let parsed: Vec<Method> = methods.iter().filter_map(|m| m.parse().ok()).collect();
                 Some(CompiledRoutingCondition::Method(parsed))
             }
-            RoutingCondition::ClientIp { cidrs } => {
-                Some(CompiledRoutingCondition::ClientIp(cidrs))
-            }
+            RoutingCondition::ClientIp { cidrs } => Some(CompiledRoutingCondition::ClientIp(cidrs)),
             RoutingCondition::Geo { countries } => Some(CompiledRoutingCondition::Geo(countries)),
             RoutingCondition::Time {
                 days,
@@ -738,8 +732,14 @@ impl ConditionalRouter {
         client_ip: Option<&str>,
     ) -> Option<&RoutingAction> {
         for rule in &self.rules {
-            if self.matches_all_conditions(&rule.conditions, path, query, method, headers, client_ip)
-            {
+            if self.matches_all_conditions(
+                &rule.conditions,
+                path,
+                query,
+                method,
+                headers,
+                client_ip,
+            ) {
                 debug!(rule = %rule.name, "Routing rule matched");
                 return Some(&rule.action);
             }
@@ -756,9 +756,9 @@ impl ConditionalRouter {
         headers: &HeaderMap,
         client_ip: Option<&str>,
     ) -> bool {
-        conditions.iter().all(|c| {
-            self.matches_condition(c, path, query, method, headers, client_ip)
-        })
+        conditions
+            .iter()
+            .all(|c| self.matches_condition(c, path, query, method, headers, client_ip))
     }
 
     fn matches_condition(
@@ -785,9 +785,9 @@ impl ConditionalRouter {
                 })
                 .unwrap_or(false),
             CompiledRoutingCondition::Method(methods) => methods.contains(method),
-            CompiledRoutingCondition::ClientIp(cidrs) => {
-                client_ip.map(|ip| cidrs.iter().any(|cidr| ip_matches_cidr(ip, cidr))).unwrap_or(false)
-            }
+            CompiledRoutingCondition::ClientIp(cidrs) => client_ip
+                .map(|ip| cidrs.iter().any(|cidr| ip_matches_cidr(ip, cidr)))
+                .unwrap_or(false),
             CompiledRoutingCondition::Geo(_countries) => {
                 // Geo lookup would require a GeoIP database
                 // For now, this always returns false (not implemented)
@@ -965,9 +965,9 @@ impl EdgeProcessor {
                     .conditions
                     .iter()
                     .map(|c| match c {
-                        RoutingConditionConfig::Path { pattern } => {
-                            RoutingCondition::Path { pattern: pattern.clone() }
-                        }
+                        RoutingConditionConfig::Path { pattern } => RoutingCondition::Path {
+                            pattern: pattern.clone(),
+                        },
                         RoutingConditionConfig::Header { name, pattern } => {
                             RoutingCondition::Header {
                                 name: name.clone(),
@@ -980,15 +980,15 @@ impl EdgeProcessor {
                                 pattern: pattern.clone(),
                             }
                         }
-                        RoutingConditionConfig::Method { methods } => {
-                            RoutingCondition::Method { methods: methods.clone() }
-                        }
-                        RoutingConditionConfig::ClientIp { cidrs } => {
-                            RoutingCondition::ClientIp { cidrs: cidrs.clone() }
-                        }
-                        RoutingConditionConfig::Geo { countries } => {
-                            RoutingCondition::Geo { countries: countries.clone() }
-                        }
+                        RoutingConditionConfig::Method { methods } => RoutingCondition::Method {
+                            methods: methods.clone(),
+                        },
+                        RoutingConditionConfig::ClientIp { cidrs } => RoutingCondition::ClientIp {
+                            cidrs: cidrs.clone(),
+                        },
+                        RoutingConditionConfig::Geo { countries } => RoutingCondition::Geo {
+                            countries: countries.clone(),
+                        },
                         RoutingConditionConfig::Time {
                             days,
                             start_hour,
@@ -1001,34 +1001,33 @@ impl EdgeProcessor {
                     })
                     .collect(),
                 action: match &r.action {
-                    RoutingActionConfig::RouteToOrigin { origin } => {
-                        RoutingAction::RouteToOrigin { origin: origin.clone() }
-                    }
-                    RoutingActionConfig::Redirect { url, status } => {
-                        RoutingAction::Redirect {
-                            url: url.clone(),
-                            status: *status,
-                        }
-                    }
-                    RoutingActionConfig::FixedResponse { status, body, headers } => {
-                        RoutingAction::FixedResponse {
-                            status: *status,
-                            body: body.clone(),
-                            headers: headers.clone(),
-                        }
-                    }
-                    RoutingActionConfig::Modify { set_headers, set_path } => {
-                        RoutingAction::Modify {
-                            set_headers: set_headers.clone(),
-                            set_path: set_path.clone(),
-                        }
-                    }
-                    RoutingActionConfig::Block { status, message } => {
-                        RoutingAction::Block {
-                            status: *status,
-                            message: message.clone(),
-                        }
-                    }
+                    RoutingActionConfig::RouteToOrigin { origin } => RoutingAction::RouteToOrigin {
+                        origin: origin.clone(),
+                    },
+                    RoutingActionConfig::Redirect { url, status } => RoutingAction::Redirect {
+                        url: url.clone(),
+                        status: *status,
+                    },
+                    RoutingActionConfig::FixedResponse {
+                        status,
+                        body,
+                        headers,
+                    } => RoutingAction::FixedResponse {
+                        status: *status,
+                        body: body.clone(),
+                        headers: headers.clone(),
+                    },
+                    RoutingActionConfig::Modify {
+                        set_headers,
+                        set_path,
+                    } => RoutingAction::Modify {
+                        set_headers: set_headers.clone(),
+                        set_path: set_path.clone(),
+                    },
+                    RoutingActionConfig::Block { status, message } => RoutingAction::Block {
+                        status: *status,
+                        message: message.clone(),
+                    },
                 },
                 priority: r.priority,
             })
@@ -1054,7 +1053,10 @@ impl EdgeProcessor {
         client_ip: Option<&str>,
     ) -> EdgeProcessingResult {
         // First, check conditional routing
-        if let Some(action) = self.router.evaluate(path, query, method, headers, client_ip) {
+        if let Some(action) = self
+            .router
+            .evaluate(path, query, method, headers, client_ip)
+        {
             return EdgeProcessingResult::RouteAction(action.clone());
         }
 
@@ -1062,12 +1064,9 @@ impl EdgeProcessor {
         let normalized_query = self.query_normalizer.normalize(query);
 
         // Rewrite URL
-        let rewritten_path = self.rewriter.rewrite(
-            path,
-            normalized_query.as_deref().or(query),
-            method,
-            headers,
-        );
+        let rewritten_path =
+            self.rewriter
+                .rewrite(path, normalized_query.as_deref().or(query), method, headers);
 
         EdgeProcessingResult::Continue {
             path: rewritten_path,
@@ -1131,9 +1130,7 @@ pub async fn edge_processing_middleware(
     );
 
     match result {
-        EdgeProcessingResult::RouteAction(action) => {
-            handle_routing_action(action)
-        }
+        EdgeProcessingResult::RouteAction(action) => handle_routing_action(action),
         EdgeProcessingResult::Continue {
             path: new_path,
             query: new_query,
@@ -1191,10 +1188,9 @@ fn handle_routing_action(action: RoutingAction) -> Response<Body> {
 
             if let Some(headers_map) = headers {
                 for (name, value) in headers_map {
-                    if let (Ok(name), Ok(value)) = (
-                        HeaderName::try_from(&name),
-                        HeaderValue::try_from(&value),
-                    ) {
+                    if let (Ok(name), Ok(value)) =
+                        (HeaderName::try_from(&name), HeaderValue::try_from(&value))
+                    {
                         response.headers_mut().insert(name, value);
                     }
                 }
@@ -1310,10 +1306,7 @@ mod tests {
 
         assert!(headers.get("x-remove-me").is_none());
         assert!(headers.get("x-keep-me").is_some());
-        assert_eq!(
-            headers.get("x-custom").unwrap().to_str().unwrap(),
-            "value"
-        );
+        assert_eq!(headers.get("x-custom").unwrap().to_str().unwrap(), "value");
     }
 
     #[test]

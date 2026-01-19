@@ -158,7 +158,7 @@ curl -H "Authorization: Bearer your-secret-token" http://localhost:8080/_cdn/sta
 
 ### CDN Proxy
 
-```
+```text
 GET /<origin>/<path>
 ```
 
@@ -172,7 +172,7 @@ curl http://localhost:8080/myapp/api/users
 
 ### Health Check
 
-```
+```text
 GET /_cdn/health
 ```
 
@@ -180,7 +180,7 @@ Returns CDN health status.
 
 ### Cache Statistics
 
-```
+```text
 GET /_cdn/stats
 ```
 
@@ -188,7 +188,7 @@ Returns cache statistics including hit ratio, size, and entry count.
 
 ### Prometheus Metrics
 
-```
+```text
 GET /_cdn/metrics
 ```
 
@@ -196,7 +196,7 @@ Returns metrics in Prometheus format.
 
 ### Circuit Breaker Status
 
-```
+```text
 GET /_cdn/circuit-breakers
 ```
 
@@ -204,7 +204,7 @@ Returns the state of all circuit breakers for each origin.
 
 ### Origin Health Status
 
-```
+```text
 GET /_cdn/origins/health
 ```
 
@@ -238,7 +238,7 @@ Health status values: `healthy`, `unhealthy`, `unknown`
 
 ### Cache Purge
 
-```
+```text
 POST /_cdn/purge
 Content-Type: application/json
 
@@ -257,7 +257,7 @@ Content-Type: application/json
 The CDN adds these headers to responses:
 
 | Header | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `X-Cache` | Cache status: HIT, MISS, STALE, STALE-IF-ERROR, BYPASS |
 | `X-Cache-Key` | Cache key used for this request |
 | `Age` | Seconds since response was cached (RFC 9111) |
@@ -305,7 +305,7 @@ Rate limiting uses a token bucket algorithm:
 The circuit breaker protects against cascading failures:
 
 | State | Description |
-|-------|-------------|
+| ------- | ------------- |
 | **Closed** | Normal operation, requests flow to origin |
 | **Open** | Origin marked as failed, requests fail fast |
 | **Half-Open** | Testing recovery, limited requests allowed |
@@ -330,7 +330,7 @@ Available Prometheus metrics:
 
 ## Architecture
 
-```
+```text
                     ┌─────────────────┐
                     │   HTTP Client   │
                     └────────┬────────┘
@@ -381,14 +381,14 @@ cargo test
 cargo test -- --nocapture
 ```
 
-## RFC Compliance
+## RFC Compliance Tracking
 
 For detailed RFC compliance status, see [docs/RFC_COMPLIANCE.md](docs/RFC_COMPLIANCE.md).
 
 ### Summary
 
 | RFC | Title | Status |
-|-----|-------|--------|
+| ----- | ------- | -------- |
 | RFC 9110 | HTTP Semantics | Compliant (GET, HEAD, Range, conditional requests) |
 | RFC 9111 | HTTP Caching | Compliant (Cache-Control, Age, Vary) |
 | RFC 5861 | Stale Content Extensions | Compliant (stale-while-revalidate, stale-if-error) |

@@ -97,11 +97,7 @@ pub async fn admin_auth_middleware(
     // Check IP allowlist
     if !auth.is_ip_allowed(&client_ip) {
         warn!(ip = %client_ip, "Admin request from non-allowed IP");
-        return (
-            StatusCode::FORBIDDEN,
-            "Access denied: IP not in allowlist",
-        )
-            .into_response();
+        return (StatusCode::FORBIDDEN, "Access denied: IP not in allowlist").into_response();
     }
 
     // Check Authorization header

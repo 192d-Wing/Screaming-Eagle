@@ -5,9 +5,9 @@ use std::time::Duration;
 /// Test that the cache correctly stores and retrieves entries
 #[test]
 fn test_cache_operations() {
+    use bytes::Bytes;
     use screaming_eagle::cache::{Cache, CacheEntry, CacheStatus};
     use screaming_eagle::config::CacheConfig;
-    use bytes::Bytes;
     use std::collections::HashMap;
     use std::time::Instant;
 
@@ -48,9 +48,9 @@ fn test_cache_operations() {
 /// Test cache invalidation
 #[test]
 fn test_cache_invalidation() {
+    use bytes::Bytes;
     use screaming_eagle::cache::Cache;
     use screaming_eagle::config::CacheConfig;
-    use bytes::Bytes;
     use std::collections::HashMap;
     use std::time::Instant;
 
@@ -96,7 +96,7 @@ fn test_cache_invalidation() {
 /// Test rate limiter
 #[test]
 fn test_rate_limiter() {
-    use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter, RateLimitResult};
+    use screaming_eagle::rate_limit::{RateLimitConfig, RateLimitResult, RateLimiter};
     use std::net::{IpAddr, Ipv4Addr};
 
     let config = RateLimitConfig {
@@ -129,7 +129,7 @@ fn test_rate_limiter() {
 /// Test rate limiter when disabled
 #[test]
 fn test_rate_limiter_disabled() {
-    use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter, RateLimitResult};
+    use screaming_eagle::rate_limit::{RateLimitConfig, RateLimitResult, RateLimiter};
     use std::net::{IpAddr, Ipv4Addr};
 
     let config = RateLimitConfig {
@@ -213,7 +213,8 @@ fn test_cache_control_parsing() {
     assert_eq!(directives.max_age, Some(600));
 
     // Test stale-while-revalidate and stale-if-error (RFC 5861)
-    let directives = parse_cache_control("max-age=300, stale-while-revalidate=60, stale-if-error=86400");
+    let directives =
+        parse_cache_control("max-age=300, stale-while-revalidate=60, stale-if-error=86400");
     assert_eq!(directives.max_age, Some(300));
     assert_eq!(directives.stale_while_revalidate, Some(60));
     assert_eq!(directives.stale_if_error, Some(86400));

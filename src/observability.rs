@@ -140,8 +140,7 @@ impl EnhancedMetrics {
 
         // Request metrics
         let requests_total = CounterVec::new(
-            Opts::new("cdn_requests_total", "Total CDN requests")
-                .namespace("screaming_eagle"),
+            Opts::new("cdn_requests_total", "Total CDN requests").namespace("screaming_eagle"),
             &["origin", "method", "status", "cache_status"],
         )
         .unwrap();
@@ -156,15 +155,20 @@ impl EnhancedMetrics {
         let request_duration = HistogramVec::new(
             HistogramOpts::new("cdn_request_duration_seconds", "Request duration")
                 .namespace("screaming_eagle")
-                .buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]),
+                .buckets(vec![
+                    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+                ]),
             &["origin", "cache_status"],
         )
         .unwrap();
 
         let request_duration_by_path = HistogramVec::new(
-            HistogramOpts::new("cdn_request_duration_by_path_seconds", "Request duration by path")
-                .namespace("screaming_eagle")
-                .buckets(vec![0.01, 0.05, 0.1, 0.5, 1.0, 5.0]),
+            HistogramOpts::new(
+                "cdn_request_duration_by_path_seconds",
+                "Request duration by path",
+            )
+            .namespace("screaming_eagle")
+            .buckets(vec![0.01, 0.05, 0.1, 0.5, 1.0, 5.0]),
             &["origin", "path_prefix"],
         )
         .unwrap();
@@ -216,16 +220,18 @@ impl EnhancedMetrics {
         .unwrap();
 
         let bytes_received = CounterVec::new(
-            Opts::new("cdn_bytes_received_total", "Total bytes received from origins")
-                .namespace("screaming_eagle"),
+            Opts::new(
+                "cdn_bytes_received_total",
+                "Total bytes received from origins",
+            )
+            .namespace("screaming_eagle"),
             &["origin"],
         )
         .unwrap();
 
         // Error metrics
         let errors_by_type = CounterVec::new(
-            Opts::new("cdn_errors_total", "Errors by type")
-                .namespace("screaming_eagle"),
+            Opts::new("cdn_errors_total", "Errors by type").namespace("screaming_eagle"),
             &["error_type", "origin"],
         )
         .unwrap();
@@ -240,8 +246,11 @@ impl EnhancedMetrics {
 
         // Circuit breaker metrics
         let circuit_breaker_state = GaugeVec::new(
-            Opts::new("cdn_circuit_breaker_state", "Circuit breaker state (0=closed, 1=half-open, 2=open)")
-                .namespace("screaming_eagle"),
+            Opts::new(
+                "cdn_circuit_breaker_state",
+                "Circuit breaker state (0=closed, 1=half-open, 2=open)",
+            )
+            .namespace("screaming_eagle"),
             &["origin"],
         )
         .unwrap();
@@ -255,8 +264,7 @@ impl EnhancedMetrics {
 
         // Connection metrics
         let active_connections = GaugeVec::new(
-            Opts::new("cdn_active_connections", "Active connections")
-                .namespace("screaming_eagle"),
+            Opts::new("cdn_active_connections", "Active connections").namespace("screaming_eagle"),
             &["type"],
         )
         .unwrap();
@@ -376,12 +384,24 @@ impl EnhancedMetrics {
         }
 
         // Update path stats
-        self.update_path_stats(path, cache_status, status.is_server_error(), duration, bytes)
-            .await;
+        self.update_path_stats(
+            path,
+            cache_status,
+            status.is_server_error(),
+            duration,
+            bytes,
+        )
+        .await;
     }
 
     /// Record an origin request
-    pub fn record_origin_request(&self, origin: &str, status: StatusCode, duration: Duration, bytes: u64) {
+    pub fn record_origin_request(
+        &self,
+        origin: &str,
+        status: StatusCode,
+        duration: Duration,
+        bytes: u64,
+    ) {
         self.origin_requests
             .with_label_values(&[origin, &status.as_u16().to_string()])
             .inc();
@@ -804,11 +824,11 @@ pub struct AlertThresholds {
 impl Default for AlertThresholds {
     fn default() -> Self {
         Self {
-            error_rate_threshold: 5.0,        // 5% error rate
-            latency_p99_threshold_ms: 1000,   // 1 second P99
-            cache_hit_ratio_min: 0.7,         // 70% cache hit ratio
-            origin_error_rate_threshold: 10.0, // 10% origin error rate
-            rate_limit_threshold: 1000,       // 1000 rate limited requests/min
+            error_rate_threshold: 5.0,               // 5% error rate
+            latency_p99_threshold_ms: 1000,          // 1 second P99
+            cache_hit_ratio_min: 0.7,                // 70% cache hit ratio
+            origin_error_rate_threshold: 10.0,       // 10% origin error rate
+            rate_limit_threshold: 1000,              // 1000 rate limited requests/min
             circuit_breaker_open_threshold_secs: 60, // 60 seconds open
         }
     }
@@ -914,9 +934,7 @@ impl AlertEvaluator {
         let mut alerts = self.active_alerts.write().await;
 
         // Remove old alerts of the same type for the same origin
-        alerts.retain(|a| {
-            !(a.alert_type == alert.alert_type && a.origin == alert.origin)
-        });
+        alerts.retain(|a| !(a.alert_type == alert.alert_type && a.origin == alert.origin));
 
         alerts.push(alert);
 

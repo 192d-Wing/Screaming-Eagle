@@ -41,15 +41,23 @@ impl Metrics {
 
         // Request duration histogram
         let request_duration = HistogramVec::new(
-            HistogramOpts::new("cdn_request_duration_seconds", "Request duration in seconds")
-                .buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]),
+            HistogramOpts::new(
+                "cdn_request_duration_seconds",
+                "Request duration in seconds",
+            )
+            .buckets(vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ]),
             &["origin", "cache_status"],
         )
         .unwrap();
 
         // Origin requests counter
         let origin_requests = CounterVec::new(
-            Opts::new("cdn_origin_requests_total", "Total requests to origin servers"),
+            Opts::new(
+                "cdn_origin_requests_total",
+                "Total requests to origin servers",
+            ),
             &["origin", "status"],
         )
         .unwrap();
@@ -65,8 +73,12 @@ impl Metrics {
         registry.register(Box::new(requests_total.clone())).unwrap();
         registry.register(Box::new(cache_hits.clone())).unwrap();
         registry.register(Box::new(cache_misses.clone())).unwrap();
-        registry.register(Box::new(request_duration.clone())).unwrap();
-        registry.register(Box::new(origin_requests.clone())).unwrap();
+        registry
+            .register(Box::new(request_duration.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(origin_requests.clone()))
+            .unwrap();
         registry.register(Box::new(bytes_served.clone())).unwrap();
 
         Self {

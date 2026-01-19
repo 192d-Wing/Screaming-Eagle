@@ -42,7 +42,8 @@ impl OriginFetcher {
 
         // Configure TCP keepalive
         if pool_config.tcp_keepalive {
-            builder = builder.tcp_keepalive(Duration::from_secs(pool_config.tcp_keepalive_interval_secs));
+            builder =
+                builder.tcp_keepalive(Duration::from_secs(pool_config.tcp_keepalive_interval_secs));
         }
 
         // Configure HTTP/2
@@ -50,7 +51,9 @@ impl OriginFetcher {
             builder = builder
                 .http2_prior_knowledge()
                 .http2_initial_stream_window_size(pool_config.http2_initial_stream_window_size)
-                .http2_initial_connection_window_size(pool_config.http2_initial_connection_window_size)
+                .http2_initial_connection_window_size(
+                    pool_config.http2_initial_connection_window_size,
+                )
                 .http2_adaptive_window(true);
         }
 
@@ -78,9 +81,10 @@ impl OriginFetcher {
         query: Option<&str>,
         request_headers: &HashMap<String, String>,
     ) -> CdnResult<OriginResponse> {
-        let origin = self.origins.get(origin_name).ok_or_else(|| {
-            CdnError::ConfigError(format!("Unknown origin: {}", origin_name))
-        })?;
+        let origin = self
+            .origins
+            .get(origin_name)
+            .ok_or_else(|| CdnError::ConfigError(format!("Unknown origin: {}", origin_name)))?;
 
         let url = self.build_url(&origin.url, path, query)?;
 
@@ -145,7 +149,11 @@ impl OriginFetcher {
             // Only forward safe headers
             if matches!(
                 key_lower.as_str(),
-                "accept" | "accept-encoding" | "accept-language" | "if-none-match" | "if-modified-since"
+                "accept"
+                    | "accept-encoding"
+                    | "accept-language"
+                    | "if-none-match"
+                    | "if-modified-since"
             ) {
                 request = request.header(key.as_str(), value.as_str());
             }

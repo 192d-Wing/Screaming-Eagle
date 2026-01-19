@@ -226,10 +226,7 @@ impl HealthChecker {
 }
 
 /// Spawn background health check tasks for all origins
-pub fn spawn_health_checks(
-    checker: Arc<HealthChecker>,
-    shutdown: watch::Receiver<bool>,
-) {
+pub fn spawn_health_checks(checker: Arc<HealthChecker>, shutdown: watch::Receiver<bool>) {
     for (origin_name, origin_config) in &checker.origins {
         if origin_config.health_check_path.is_none() {
             debug!(origin = %origin_name, "Skipping health checks (no path configured)");

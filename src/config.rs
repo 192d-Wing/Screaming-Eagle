@@ -307,7 +307,10 @@ pub enum RoutingActionConfig {
 
     /// Block the request
     #[serde(rename = "block")]
-    Block { status: u16, message: Option<String> },
+    Block {
+        status: u16,
+        message: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

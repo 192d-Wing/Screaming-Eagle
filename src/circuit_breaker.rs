@@ -94,7 +94,11 @@ impl CircuitBreaker {
             }
             CircuitState::HalfOpen => {
                 let count = self.success_count.fetch_add(1, Ordering::Relaxed) + 1;
-                debug!(success_count = count, threshold = self.config.success_threshold, "HalfOpen success");
+                debug!(
+                    success_count = count,
+                    threshold = self.config.success_threshold,
+                    "HalfOpen success"
+                );
 
                 if count >= self.config.success_threshold {
                     self.transition_to_closed();
@@ -114,7 +118,11 @@ impl CircuitBreaker {
         match state {
             CircuitState::Closed => {
                 let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
-                debug!(failure_count = count, threshold = self.config.failure_threshold, "Recording failure");
+                debug!(
+                    failure_count = count,
+                    threshold = self.config.failure_threshold,
+                    "Recording failure"
+                );
 
                 if count >= self.config.failure_threshold {
                     self.transition_to_open();
@@ -191,10 +199,8 @@ impl CircuitBreakerManager {
     /// Get or create a circuit breaker for an origin
     pub fn get_breaker(&self, origin: &str) -> dashmap::mapref::one::Ref<String, CircuitBreaker> {
         if !self.breakers.contains_key(origin) {
-            self.breakers.insert(
-                origin.to_string(),
-                CircuitBreaker::new(self.config.clone()),
-            );
+            self.breakers
+                .insert(origin.to_string(), CircuitBreaker::new(self.config.clone()));
         }
         self.breakers.get(origin).unwrap()
     }
