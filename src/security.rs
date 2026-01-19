@@ -6,7 +6,7 @@
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -319,7 +319,7 @@ fn verify_hmac_signature(secret: &str, message: &str, signature: &str) -> bool {
         }
     } else {
         // Try base64
-        use base64::{engine::general_purpose::STANDARD, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD};
         match STANDARD.decode(signature) {
             Ok(bytes) => bytes,
             Err(_) => return false,

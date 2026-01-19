@@ -1,11 +1,11 @@
 use axum::{
+    Json,
     body::Body,
     extract::{ConnectInfo, Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
-    Json,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use bytes::Bytes;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,8 @@ use std::time::Instant;
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::cache::{
-    generate_cache_key_with_vary, parse_cache_control, Cache, CacheEntry, CacheStats, CacheStatus,
+    Cache, CacheEntry, CacheStats, CacheStatus, HierarchyStats, generate_cache_key_with_vary,
+    parse_cache_control,
 };
 use crate::circuit_breaker::{CircuitBreakerManager, CircuitState};
 use crate::coalesce::{AcquireResult, CoalesceStats, CoalescedResponse, RequestCoalescer};
@@ -25,7 +26,7 @@ use crate::error::{CdnError, CdnResult};
 use crate::health::{HealthChecker, OriginHealth};
 use crate::metrics::Metrics;
 use crate::origin::OriginFetcher;
-use crate::range::{extract_range, parse_range_header, ByteRange, RangeParseResult};
+use crate::range::{ByteRange, RangeParseResult, extract_range, parse_range_header};
 use crate::rate_limit::{RateLimitResult, RateLimiter};
 
 pub struct AppState {
@@ -67,6 +68,8 @@ pub struct PurgeRequest {
     pub prefix: Option<String>,
     #[serde(default)]
     pub all: bool,
+    #[serde(default)]
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,6 +131,11 @@ pub async fn cache_stats(State(state): State<Arc<AppState>>) -> Json<CacheStats>
     Json(state.cache.stats())
 }
 
+// Cache hierarchy statistics endpoint
+pub async fn hierarchy_stats(State(state): State<Arc<AppState>>) -> Json<HierarchyStats> {
+    Json(state.cache.get_hierarchy_stats())
+}
+
 // Metrics endpoint (Prometheus format)
 pub async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let metrics = state.metrics.gather();
@@ -144,6 +152,8 @@ pub async fn purge_cache(
 ) -> Json<PurgeResponse> {
     let purged_count = if request.all {
         state.cache.purge_all()
+    } else if let Some(tag) = request.tag {
+        state.cache.invalidate_by_tag(&tag)
     } else if let Some(prefix) = request.prefix {
         state.cache.invalidate_prefix(&prefix)
     } else {
@@ -787,9 +797,23 @@ fn store_in_cache(
         stale_if_error_secs: directives.stale_if_error,
         access_count: 0,
         last_accessed: now,
+        cache_tags: Vec::new(), // Tags will be added separately
     };
 
-    state.cache.set(cache_key.to_string(), entry);
+    state.cache.set(cache_key.to_string(), entry.clone());
+
+    // Extract and add cache tags from Cache-Tag header if present
+    if let Some(cache_tag_header) = headers.get("cache-tag") {
+        let tags: Vec<String> = cache_tag_header
+            .split(',')
+            .map(|tag| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+            .collect();
+
+        if !tags.is_empty() {
+            state.cache.add_tags(cache_key, tags);
+        }
+    }
 }
 
 fn build_response(

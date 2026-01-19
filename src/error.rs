@@ -1,13 +1,13 @@
 use axum::{
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
     Json,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde_json::json;
 use std::sync::OnceLock;
 use thiserror::Error;
 
-use crate::error_pages::{default_error_page, ErrorPages};
+use crate::error_pages::{ErrorPages, default_error_page};
 
 /// Global error pages instance (set during initialization)
 static ERROR_PAGES: OnceLock<ErrorPages> = OnceLock::new();

@@ -6,24 +6,24 @@
 use axum::{
     body::Body,
     extract::ConnectInfo,
-    http::{header, Request, Response, StatusCode},
+    http::{Request, Response, StatusCode, header},
     middleware::Next,
 };
-use opentelemetry::{global, KeyValue};
+use opentelemetry::{KeyValue, global};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
-    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
     Resource,
+    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
 };
 use prometheus::{CounterVec, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, info_span, warn, Instrument};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 use uuid::Uuid;
 
 use crate::cache::CacheStatus;

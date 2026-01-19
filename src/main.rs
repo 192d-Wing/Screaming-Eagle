@@ -1,7 +1,6 @@
 use axum::{
-    middleware,
+    Router, middleware,
     routing::{get, post},
-    Router,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -14,26 +13,26 @@ use tower_http::{
     trace::TraceLayer,
 };
 use tracing::info;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-use screaming_eagle::auth::{admin_auth_middleware, AdminAuth};
+use screaming_eagle::auth::{AdminAuth, admin_auth_middleware};
 use screaming_eagle::cache::Cache;
 use screaming_eagle::circuit_breaker::{self, CircuitBreakerManager};
 use screaming_eagle::coalesce::RequestCoalescer;
 use screaming_eagle::config::{self, Config};
-use screaming_eagle::edge::{edge_processing_middleware, EdgeProcessor};
+use screaming_eagle::edge::{EdgeProcessor, edge_processing_middleware};
 use screaming_eagle::error::init_error_pages;
 use screaming_eagle::error_pages::ErrorPages;
 use screaming_eagle::handlers::{
-    self, cache_stats, cdn_handler, circuit_breaker_status, coalesce_stats, health,
-    metrics as metrics_handler, origin_health_status, purge_cache, warm_cache, AppState,
+    self, AppState, cache_stats, cdn_handler, circuit_breaker_status, coalesce_stats, health,
+    metrics as metrics_handler, origin_health_status, purge_cache, warm_cache,
 };
-use screaming_eagle::health::{spawn_health_checks, HealthChecker};
+use screaming_eagle::health::{HealthChecker, spawn_health_checks};
 use screaming_eagle::metrics::Metrics;
 use screaming_eagle::origin::OriginFetcher;
 use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter};
 use screaming_eagle::security::{
-    ip_access_control_middleware, request_signing_middleware, security_headers_middleware, Security,
+    Security, ip_access_control_middleware, request_signing_middleware, security_headers_middleware,
 };
 
 #[tokio::main]

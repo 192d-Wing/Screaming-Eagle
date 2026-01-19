@@ -347,6 +347,36 @@ pub struct CacheConfig {
 
     #[serde(default)]
     pub respect_cache_control: bool,
+
+    #[serde(default)]
+    pub tags: CacheTagsConfig,
+
+    #[serde(default)]
+    pub hierarchy: CacheHierarchyConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheTagsConfig {
+    #[serde(default = "default_tags_enabled")]
+    pub enabled: bool,
+
+    #[serde(default = "default_max_tags_per_entry")]
+    pub max_tags_per_entry: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheHierarchyConfig {
+    #[serde(default = "default_hierarchy_enabled")]
+    pub enabled: bool,
+
+    #[serde(default = "default_l1_size_percent")]
+    pub l1_size_percent: usize,
+
+    #[serde(default = "default_l2_size_percent")]
+    pub l2_size_percent: usize,
+
+    #[serde(default = "default_promotion_threshold")]
+    pub promotion_threshold: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -523,8 +553,7 @@ pub struct TlsConfig {
     pub key_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AdminConfig {
     /// Enable authentication for admin endpoints
     #[serde(default)]
@@ -538,7 +567,6 @@ pub struct AdminConfig {
     #[serde(default)]
     pub allowed_ips: Vec<String>,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoalesceConfig {
@@ -606,8 +634,7 @@ fn default_error_pages_dir() -> String {
 }
 
 /// Security configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SecurityConfig {
     /// Security headers configuration
     #[serde(default)]
@@ -621,7 +648,6 @@ pub struct SecurityConfig {
     #[serde(default)]
     pub ip_access: IpAccessConfig,
 }
-
 
 /// Security headers configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -777,8 +803,7 @@ fn default_timestamp_tolerance() -> u64 {
 }
 
 /// IP-based access control configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IpAccessConfig {
     /// Enable IP-based access control (default: false)
     #[serde(default)]
@@ -800,10 +825,8 @@ pub struct IpAccessConfig {
     pub trust_proxy_headers: bool,
 }
 
-
 /// Observability configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ObservabilityConfig {
     /// Tracing configuration
     #[serde(default)]
@@ -821,7 +844,6 @@ pub struct ObservabilityConfig {
     #[serde(default)]
     pub alerting: AlertingConfig,
 }
-
 
 /// OpenTelemetry tracing configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1078,6 +1100,30 @@ fn default_stale_while_revalidate() -> u64 {
     60 // 1 minute
 }
 
+fn default_tags_enabled() -> bool {
+    true
+}
+
+fn default_max_tags_per_entry() -> usize {
+    10
+}
+
+fn default_hierarchy_enabled() -> bool {
+    true
+}
+
+fn default_l1_size_percent() -> usize {
+    20
+}
+
+fn default_l2_size_percent() -> usize {
+    80
+}
+
+fn default_promotion_threshold() -> u32 {
+    3
+}
+
 fn default_origin_timeout() -> u64 {
     30
 }
@@ -1154,6 +1200,28 @@ impl Default for CacheConfig {
             max_ttl_secs: default_max_ttl(),
             stale_while_revalidate_secs: default_stale_while_revalidate(),
             respect_cache_control: true,
+            tags: CacheTagsConfig::default(),
+            hierarchy: CacheHierarchyConfig::default(),
+        }
+    }
+}
+
+impl Default for CacheTagsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_tags_enabled(),
+            max_tags_per_entry: default_max_tags_per_entry(),
+        }
+    }
+}
+
+impl Default for CacheHierarchyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_hierarchy_enabled(),
+            l1_size_percent: default_l1_size_percent(),
+            l2_size_percent: default_l2_size_percent(),
+            promotion_threshold: default_promotion_threshold(),
         }
     }
 }

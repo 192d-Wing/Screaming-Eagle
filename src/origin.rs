@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use reqwest::{header, Client, Response};
+use reqwest::{Client, Response, header};
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};

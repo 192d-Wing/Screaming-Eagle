@@ -6,7 +6,7 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{header::HeaderName, HeaderMap, HeaderValue, Method, Request, Uri},
+    http::{HeaderMap, HeaderValue, Method, Request, Uri, header::HeaderName},
     middleware::Next,
     response::Response,
 };
@@ -18,8 +18,7 @@ use tracing::{debug, instrument, warn};
 use crate::config::{EdgeConfig as ConfigEdgeConfig, RoutingActionConfig, RoutingConditionConfig};
 
 /// Edge processing configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EdgeConfig {
     /// URL rewriting rules
     #[serde(default)]
@@ -37,7 +36,6 @@ pub struct EdgeConfig {
     #[serde(default)]
     pub routing_rules: Vec<RoutingRule>,
 }
-
 
 // ============================================================================
 // URL Rewriting
@@ -187,11 +185,7 @@ impl UrlRewriter {
             }
         }
 
-        if rewritten {
-            Some(current_path)
-        } else {
-            None
-        }
+        if rewritten { Some(current_path) } else { None }
     }
 
     fn check_condition(

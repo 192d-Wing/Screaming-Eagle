@@ -30,6 +30,7 @@ fn test_cache_operations() {
         stale_if_error_secs: Some(300),
         access_count: 0,
         last_accessed: now,
+        cache_tags: Vec::new(),
     };
 
     // Store the entry
@@ -73,6 +74,7 @@ fn test_cache_invalidation() {
         stale_if_error_secs: None,
         access_count: 0,
         last_accessed: now,
+        cache_tags: Vec::new(),
     };
 
     cache.set("key1".to_string(), entry.clone());
