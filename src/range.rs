@@ -162,7 +162,7 @@ pub fn extract_range(content: &Bytes, range: &ByteRange) -> Bytes {
 pub fn should_serve_range(
     range_header: Option<&str>,
     content_length: u64,
-    has_strong_validator: bool,
+    _has_strong_validator: bool,
 ) -> Option<RangeParseResult> {
     let header = range_header?;
 

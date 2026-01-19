@@ -714,7 +714,7 @@ pub async fn request_logging_middleware(
         .map(|s| s.to_string());
 
     // Create structured log entry
-    let log_entry = RequestLogEntry {
+    let _log_entry = RequestLogEntry {
         timestamp: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis().to_string())

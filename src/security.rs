@@ -267,11 +267,7 @@ fn validate_timestamp(
         .map_err(|_| "System time error")?
         .as_secs();
 
-    let diff = if now > timestamp {
-        now - timestamp
-    } else {
-        timestamp - now
-    };
+    let diff = now.abs_diff(timestamp);
 
     if diff > tolerance_secs {
         return Err(format!(
@@ -309,9 +305,8 @@ fn verify_hmac_signature(secret: &str, message: &str, signature: &str) -> bool {
     mac.update(message.as_bytes());
 
     // Support both hex and base64 encoded signatures
-    let expected = if signature.starts_with("sha256=") {
+    let expected = if let Some(hex_sig) = signature.strip_prefix("sha256=") {
         // GitHub-style: sha256=<hex>
-        let hex_sig = &signature[7..];
         match hex::decode(hex_sig) {
             Ok(bytes) => bytes,
             Err(_) => return false,

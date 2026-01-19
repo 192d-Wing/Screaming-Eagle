@@ -197,7 +197,7 @@ impl CircuitBreakerManager {
     }
 
     /// Get or create a circuit breaker for an origin
-    pub fn get_breaker(&self, origin: &str) -> dashmap::mapref::one::Ref<String, CircuitBreaker> {
+    pub fn get_breaker(&self, origin: &str) -> dashmap::mapref::one::Ref<'_, String, CircuitBreaker> {
         if !self.breakers.contains_key(origin) {
             self.breakers
                 .insert(origin.to_string(), CircuitBreaker::new(self.config.clone()));

@@ -524,6 +524,7 @@ pub struct TlsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AdminConfig {
     /// Enable authentication for admin endpoints
     #[serde(default)]
@@ -538,15 +539,6 @@ pub struct AdminConfig {
     pub allowed_ips: Vec<String>,
 }
 
-impl Default for AdminConfig {
-    fn default() -> Self {
-        Self {
-            auth_enabled: false,
-            auth_token: None,
-            allowed_ips: Vec::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoalesceConfig {
@@ -615,6 +607,7 @@ fn default_error_pages_dir() -> String {
 
 /// Security configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SecurityConfig {
     /// Security headers configuration
     #[serde(default)]
@@ -629,15 +622,6 @@ pub struct SecurityConfig {
     pub ip_access: IpAccessConfig,
 }
 
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            headers: SecurityHeadersConfig::default(),
-            signing: RequestSigningConfig::default(),
-            ip_access: IpAccessConfig::default(),
-        }
-    }
-}
 
 /// Security headers configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -794,6 +778,7 @@ fn default_timestamp_tolerance() -> u64 {
 
 /// IP-based access control configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct IpAccessConfig {
     /// Enable IP-based access control (default: false)
     #[serde(default)]
@@ -815,19 +800,10 @@ pub struct IpAccessConfig {
     pub trust_proxy_headers: bool,
 }
 
-impl Default for IpAccessConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            allowlist: Vec::new(),
-            blocklist: Vec::new(),
-            trust_proxy_headers: false,
-        }
-    }
-}
 
 /// Observability configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ObservabilityConfig {
     /// Tracing configuration
     #[serde(default)]
@@ -846,16 +822,6 @@ pub struct ObservabilityConfig {
     pub alerting: AlertingConfig,
 }
 
-impl Default for ObservabilityConfig {
-    fn default() -> Self {
-        Self {
-            tracing: TracingConfig::default(),
-            metrics: MetricsConfig::default(),
-            request_logging: RequestLoggingConfig::default(),
-            alerting: AlertingConfig::default(),
-        }
-    }
-}
 
 /// OpenTelemetry tracing configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

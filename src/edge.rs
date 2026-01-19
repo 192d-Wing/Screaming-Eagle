@@ -19,6 +19,7 @@ use crate::config::{EdgeConfig as ConfigEdgeConfig, RoutingActionConfig, Routing
 
 /// Edge processing configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct EdgeConfig {
     /// URL rewriting rules
     #[serde(default)]
@@ -37,16 +38,6 @@ pub struct EdgeConfig {
     pub routing_rules: Vec<RoutingRule>,
 }
 
-impl Default for EdgeConfig {
-    fn default() -> Self {
-        Self {
-            rewrite_rules: Vec::new(),
-            header_transforms: HeaderTransforms::default(),
-            query_normalization: QueryNormalizationConfig::default(),
-            routing_rules: Vec::new(),
-        }
-    }
-}
 
 // ============================================================================
 // URL Rewriting
@@ -675,7 +666,7 @@ impl ConditionalRouter {
                 let conditions: Vec<CompiledRoutingCondition> = rule
                     .conditions
                     .into_iter()
-                    .filter_map(|c| Self::compile_condition(c))
+                    .filter_map(Self::compile_condition)
                     .collect();
 
                 Some(CompiledRoutingRule {
