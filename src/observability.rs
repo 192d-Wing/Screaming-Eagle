@@ -12,8 +12,7 @@ use axum::{
 use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
-    runtime,
-    trace::{self, RandomIdGenerator, Sampler},
+    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
     Resource,
 };
 use prometheus::{CounterVec, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry};
@@ -609,26 +608,30 @@ pub fn init_tracing(config: &ObservabilityConfig) -> anyhow::Result<()> {
 
     info!(endpoint = %otlp_endpoint, "Initializing OpenTelemetry tracing");
 
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint(otlp_endpoint),
-        )
-        .with_trace_config(
-            trace::config()
-                .with_sampler(Sampler::TraceIdRatioBased(config.tracing.sample_rate))
-                .with_id_generator(RandomIdGenerator::default())
-                .with_resource(Resource::new(vec![
-                    KeyValue::new("service.name", config.tracing.service_name.clone()),
-                    KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-                ])),
-        )
-        .install_batch(runtime::Tokio)?;
+    // Create OTLP exporter
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(otlp_endpoint)
+        .build()?;
+
+    // Create resource with service information
+    let resource = Resource::builder()
+        .with_attributes(vec![
+            KeyValue::new("service.name", config.tracing.service_name.clone()),
+            KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+        ])
+        .build();
+
+    // Create tracer provider with batch processor
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_sampler(Sampler::TraceIdRatioBased(config.tracing.sample_rate))
+        .with_id_generator(RandomIdGenerator::default())
+        .with_resource(resource)
+        .build();
 
     // Set global tracer
-    global::set_tracer_provider(tracer.provider().unwrap().clone());
+    global::set_tracer_provider(tracer_provider);
 
     info!("OpenTelemetry tracing initialized");
     Ok(())
@@ -636,7 +639,9 @@ pub fn init_tracing(config: &ObservabilityConfig) -> anyhow::Result<()> {
 
 /// Shutdown OpenTelemetry
 pub fn shutdown_tracing() {
-    global::shutdown_tracer_provider();
+    // In OpenTelemetry 0.31, there's no global shutdown function
+    // The tracer provider should be managed by the application
+    // and will be cleaned up when dropped
 }
 
 /// Middleware for request logging and tracing

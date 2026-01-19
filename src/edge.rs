@@ -793,7 +793,7 @@ impl ConditionalRouter {
                 let weekday = now.format("%w").to_string().parse::<u8>().unwrap_or(0);
                 let hour = now.format("%H").to_string().parse::<u8>().unwrap_or(0);
 
-                if let Some(ref allowed_days) = days {
+                if let Some(allowed_days) = days {
                     if !allowed_days.contains(&weekday) {
                         return false;
                     }
