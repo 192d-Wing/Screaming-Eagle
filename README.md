@@ -396,4 +396,4 @@ For detailed RFC compliance status, see [docs/RFC_COMPLIANCE.md](docs/RFC_COMPLI
 
 ## License
 
-MIT License - see LICENSE file for details.
+Apache 2 - see LICENSE file for details.
