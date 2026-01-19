@@ -5,6 +5,7 @@ A high-performance, RFC-compliant Content Delivery Network written in Rust.
 ## Features
 
 ### Core CDN
+
 - **High Performance**: Built with Tokio and Axum for async I/O and minimal latency
 - **In-Memory Caching**: Fast LRU-style cache with configurable size limits
 - **Multiple Origins**: Support for multiple origin servers with per-origin configuration
@@ -16,6 +17,7 @@ A high-performance, RFC-compliant Content Delivery Network written in Rust.
 - **Docker Support**: Ready-to-use Dockerfile and docker-compose
 
 ### RFC Compliance
+
 - **HTTP Caching (RFC 9111)**: Full Cache-Control support, Age header, conditional requests
 - **Range Requests (RFC 9110)**: 206 Partial Content for video streaming and large downloads
 - **Stale Content (RFC 5861)**: stale-while-revalidate and stale-if-error directives
@@ -24,6 +26,7 @@ A high-performance, RFC-compliant Content Delivery Network written in Rust.
 - **Standard Headers**: Age, Date, Via, Accept-Ranges headers on all responses
 
 ### Reliability
+
 - **Rate Limiting**: Token bucket rate limiting per client IP
 - **Circuit Breaker**: Automatic origin failure detection and recovery
 - **Origin Health Checks**: Periodic background health monitoring for origins
@@ -31,6 +34,7 @@ A high-performance, RFC-compliant Content Delivery Network written in Rust.
 - **Graceful Shutdown**: Clean shutdown with in-flight request handling
 
 ### Observability
+
 - **Prometheus Metrics**: Comprehensive metrics for monitoring
 - **Cache Purge API**: Purge by key, prefix, or all entries
 - **Structured Logging**: JSON logging with tracing
@@ -134,17 +138,20 @@ allowed_ips = ["127.0.0.1", "10.0.0.0/8"]  # Optional: restrict access by IP
 ### Authentication
 
 When admin authentication is enabled (`admin.auth_enabled = true`), the following endpoints require a bearer token:
+
 - `/_cdn/stats` - Cache statistics
 - `/_cdn/purge` - Cache purge
 - `/_cdn/circuit-breakers` - Circuit breaker status
 - `/_cdn/origins/health` - Origin health status
 
 Public endpoints (no authentication required):
+
 - `/_cdn/health` - CDN health check
 - `/_cdn/metrics` - Prometheus metrics
 - All CDN proxy routes
 
 **Example authenticated request:**
+
 ```bash
 curl -H "Authorization: Bearer your-secret-token" http://localhost:8080/_cdn/stats
 ```
@@ -158,6 +165,7 @@ GET /<origin>/<path>
 Proxies requests to the configured origin and caches the response.
 
 **Example:**
+
 ```bash
 curl http://localhost:8080/myapp/api/users
 ```
@@ -273,6 +281,7 @@ curl -H "Range: bytes=0-1023" http://localhost:8080/static/video.mp4
 ```
 
 Use cases:
+
 - Video streaming (seeking)
 - Resumable downloads
 - Large file transfers
@@ -302,6 +311,7 @@ The circuit breaker protects against cascading failures:
 | **Half-Open** | Testing recovery, limited requests allowed |
 
 Transitions:
+
 - Closed → Open: After `failure_threshold` consecutive failures
 - Open → Half-Open: After `reset_timeout_secs` seconds
 - Half-Open → Closed: After `success_threshold` consecutive successes
@@ -337,27 +347,27 @@ Available Prometheus metrics:
                              │
               ┌──────────────┼──────────────┐
               │              │              │
-    ┌─────────▼─────────┐   │    ┌─────────▼─────────┐
-    │   CDN Handler     │   │    │   Admin API       │
-    │  /<origin>/<path> │   │    │   /_cdn/*         │
-    └─────────┬─────────┘   │    └───────────────────┘
-              │             │
-    ┌─────────▼─────────┐   │
-    │   Cache Layer     │   │
-    │   (DashMap LRU)   │   │
-    └─────────┬─────────┘   │
-              │             │
-    ┌─────────▼─────────┐   │
-    │ Circuit Breaker   │   │
-    └─────────┬─────────┘   │
-              │             │
-    ┌─────────▼─────────┐   │
-    │  Origin Fetcher   │   │
-    │   (reqwest)       │   │
-    └─────────┬─────────┘   │
-              │             │
-    ┌─────────▼─────────┐   │
-    │   Origin Server   │◄──┘
+    ┌─────────▼─────────┐    │   ┌─────────▼─────────┐
+    │   CDN Handler     │    │   │   Admin API       │
+    │  /<origin>/<path> │    │   │   /_cdn/*         │
+    └─────────┬─────────┘    │   └───────────────────┘
+              │              │
+    ┌─────────▼─────────┐    │
+    │   Cache Layer     │    │
+    │   (DashMap LRU)   │    │
+    └─────────┬─────────┘    │
+              │              │
+    ┌─────────▼─────────┐    │
+    │ Circuit Breaker   │    │
+    └─────────┬─────────┘    │
+              │              │
+    ┌─────────▼─────────┐    │
+    │  Origin Fetcher   │    │
+    │   (reqwest)       │    │
+    └─────────┬─────────┘    │
+              │              │
+    ┌─────────▼─────────┐    │
+    │   Origin Server   │◄───┘
     └───────────────────┘
 ```
 
