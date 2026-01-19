@@ -34,6 +34,7 @@ use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter};
 use screaming_eagle::security::{
     ip_access_control_middleware, request_signing_middleware, security_headers_middleware, Security,
 };
+use screaming_eagle::edge::{edge_processing_middleware, EdgeProcessor};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -142,8 +143,18 @@ async fn main() -> anyhow::Result<()> {
         info!("IP-based access control enabled");
     }
 
+    // Initialize edge processor
+    let edge_processor = Arc::new(EdgeProcessor::from_config(&config.edge));
+    if config.edge.enabled {
+        info!(
+            "Edge processing enabled ({} rewrite rules, {} routing rules)",
+            config.edge.rewrite_rules.len(),
+            config.edge.routing_rules.len()
+        );
+    }
+
     // Build router
-    let app = build_router(state, admin_auth, security);
+    let app = build_router(state, admin_auth, security, edge_processor, config.edge.enabled);
 
     // Start server
     let addr: SocketAddr = config.server_addr().parse()?;
@@ -229,7 +240,13 @@ fn init_logging(config: &config::LoggingConfig) {
     }
 }
 
-fn build_router(state: Arc<AppState>, admin_auth: Arc<AdminAuth>, security: Arc<Security>) -> Router {
+fn build_router(
+    state: Arc<AppState>,
+    admin_auth: Arc<AdminAuth>,
+    security: Arc<Security>,
+    edge_processor: Arc<EdgeProcessor>,
+    edge_enabled: bool,
+) -> Router {
     // Public API routes (no auth required)
     let public_api_routes = Router::new()
         .route("/health", get(health))
@@ -258,8 +275,8 @@ fn build_router(state: Arc<AppState>, admin_auth: Arc<AdminAuth>, security: Arc<
         .route("/{origin}/{*path}", get(cdn_handler).head(cdn_handler))
         .route("/{*path}", get(handlers::root_cdn_handler).head(handlers::root_cdn_handler));
 
-    // Combine routes with security layers
-    Router::new()
+    // Build router with middleware layers
+    let mut router = Router::new()
         .nest("/_cdn", api_routes)
         .merge(cdn_routes)
         .layer(
@@ -285,8 +302,17 @@ fn build_router(state: Arc<AppState>, admin_auth: Arc<AdminAuth>, security: Arc<
         .layer(middleware::from_fn_with_state(
             security.clone(),
             ip_access_control_middleware,
-        ))
-        .with_state(state)
+        ));
+
+    // Add edge processing middleware if enabled
+    if edge_enabled {
+        router = router.layer(middleware::from_fn_with_state(
+            edge_processor,
+            edge_processing_middleware,
+        ));
+    }
+
+    router.with_state(state)
 }
 
 async fn shutdown_signal() {

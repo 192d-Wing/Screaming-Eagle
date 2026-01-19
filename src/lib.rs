@@ -5,6 +5,7 @@ pub mod cache;
 pub mod circuit_breaker;
 pub mod coalesce;
 pub mod config;
+pub mod edge;
 pub mod error;
 pub mod error_pages;
 pub mod handlers;

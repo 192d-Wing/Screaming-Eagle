@@ -45,6 +45,269 @@ pub struct Config {
 
     #[serde(default)]
     pub observability: ObservabilityConfig,
+
+    #[serde(default)]
+    pub edge: EdgeConfig,
+}
+
+/// Edge logic configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeConfig {
+    /// Enable edge processing (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// URL rewriting rules
+    #[serde(default)]
+    pub rewrite_rules: Vec<RewriteRuleConfig>,
+
+    /// Header transformation settings
+    #[serde(default)]
+    pub header_transforms: HeaderTransformsConfig,
+
+    /// Query string normalization settings
+    #[serde(default)]
+    pub query_normalization: QueryNormalizationConfig,
+
+    /// Conditional routing rules
+    #[serde(default)]
+    pub routing_rules: Vec<RoutingRuleConfig>,
+}
+
+impl Default for EdgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            rewrite_rules: Vec::new(),
+            header_transforms: HeaderTransformsConfig::default(),
+            query_normalization: QueryNormalizationConfig::default(),
+            routing_rules: Vec::new(),
+        }
+    }
+}
+
+/// URL rewrite rule configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewriteRuleConfig {
+    /// Rule name for logging
+    pub name: String,
+
+    /// Regex pattern to match against the URL path
+    pub pattern: String,
+
+    /// Replacement string (supports capture groups like $1, $2)
+    pub replacement: String,
+
+    /// Whether to stop processing after this rule matches
+    #[serde(default)]
+    pub stop: bool,
+
+    /// Optional condition for when this rule applies
+    #[serde(default)]
+    pub condition: Option<RewriteConditionConfig>,
+}
+
+/// Condition for rewrite rule application
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewriteConditionConfig {
+    /// Header name to check
+    pub header: Option<String>,
+
+    /// Header value pattern (regex)
+    pub header_pattern: Option<String>,
+
+    /// Query parameter to check
+    pub query_param: Option<String>,
+
+    /// Query value pattern (regex)
+    pub query_pattern: Option<String>,
+
+    /// HTTP methods this rule applies to
+    #[serde(default)]
+    pub methods: Vec<String>,
+}
+
+/// Header transformation configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HeaderTransformsConfig {
+    /// Headers to add to requests going to origin
+    #[serde(default)]
+    pub request_add: HashMap<String, String>,
+
+    /// Headers to remove from requests going to origin
+    #[serde(default)]
+    pub request_remove: Vec<String>,
+
+    /// Headers to add to responses going to client
+    #[serde(default)]
+    pub response_add: HashMap<String, String>,
+
+    /// Headers to remove from responses going to client
+    #[serde(default)]
+    pub response_remove: Vec<String>,
+
+    /// Header value transformations (regex-based)
+    #[serde(default)]
+    pub transformations: Vec<HeaderTransformationConfig>,
+}
+
+/// A single header transformation rule
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeaderTransformationConfig {
+    /// Header name to transform
+    pub header: String,
+
+    /// Pattern to match in the header value
+    pub pattern: String,
+
+    /// Replacement value
+    pub replacement: String,
+
+    /// Apply to request (true) or response (false)
+    #[serde(default)]
+    pub request: bool,
+}
+
+/// Query string normalization configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryNormalizationConfig {
+    /// Whether to sort query parameters alphabetically
+    #[serde(default = "default_true")]
+    pub sort_params: bool,
+
+    /// Whether to remove empty parameters
+    #[serde(default = "default_true")]
+    pub remove_empty: bool,
+
+    /// Parameters to always remove (e.g., tracking params)
+    #[serde(default = "default_tracking_params")]
+    pub remove_params: Vec<String>,
+
+    /// Parameters to keep (if set, only these are kept)
+    #[serde(default)]
+    pub keep_only_params: Vec<String>,
+
+    /// Whether to lowercase parameter names
+    #[serde(default)]
+    pub lowercase_names: bool,
+
+    /// Whether to decode and re-encode values for consistency
+    #[serde(default = "default_true")]
+    pub normalize_encoding: bool,
+}
+
+impl Default for QueryNormalizationConfig {
+    fn default() -> Self {
+        Self {
+            sort_params: true,
+            remove_empty: true,
+            remove_params: default_tracking_params(),
+            keep_only_params: Vec::new(),
+            lowercase_names: false,
+            normalize_encoding: true,
+        }
+    }
+}
+
+fn default_tracking_params() -> Vec<String> {
+    vec![
+        "utm_source".to_string(),
+        "utm_medium".to_string(),
+        "utm_campaign".to_string(),
+        "utm_term".to_string(),
+        "utm_content".to_string(),
+        "fbclid".to_string(),
+        "gclid".to_string(),
+    ]
+}
+
+/// A conditional routing rule configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingRuleConfig {
+    /// Rule name for logging
+    pub name: String,
+
+    /// Conditions that must all match
+    pub conditions: Vec<RoutingConditionConfig>,
+
+    /// Action to take when conditions match
+    pub action: RoutingActionConfig,
+
+    /// Priority (higher = checked first)
+    #[serde(default)]
+    pub priority: i32,
+}
+
+/// A routing condition configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum RoutingConditionConfig {
+    /// Match path pattern
+    #[serde(rename = "path")]
+    Path { pattern: String },
+
+    /// Match header value
+    #[serde(rename = "header")]
+    Header { name: String, pattern: String },
+
+    /// Match query parameter
+    #[serde(rename = "query")]
+    Query { param: String, pattern: String },
+
+    /// Match HTTP method
+    #[serde(rename = "method")]
+    Method { methods: Vec<String> },
+
+    /// Match client IP (CIDR)
+    #[serde(rename = "ip")]
+    ClientIp { cidrs: Vec<String> },
+
+    /// Geographic location (country codes)
+    #[serde(rename = "geo")]
+    Geo { countries: Vec<String> },
+
+    /// Time-based condition
+    #[serde(rename = "time")]
+    Time {
+        /// Days of week (0=Sunday, 6=Saturday)
+        days: Option<Vec<u8>>,
+        /// Start hour (0-23)
+        start_hour: Option<u8>,
+        /// End hour (0-23)
+        end_hour: Option<u8>,
+    },
+}
+
+/// Action to take when routing conditions match
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum RoutingActionConfig {
+    /// Route to a specific origin
+    #[serde(rename = "origin")]
+    RouteToOrigin { origin: String },
+
+    /// Redirect to a URL
+    #[serde(rename = "redirect")]
+    Redirect { url: String, status: u16 },
+
+    /// Return a fixed response
+    #[serde(rename = "response")]
+    FixedResponse {
+        status: u16,
+        body: Option<String>,
+        headers: Option<HashMap<String, String>>,
+    },
+
+    /// Modify the request and continue
+    #[serde(rename = "modify")]
+    Modify {
+        set_headers: Option<HashMap<String, String>>,
+        set_path: Option<String>,
+    },
+
+    /// Block the request
+    #[serde(rename = "block")]
+    Block { status: u16, message: Option<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -908,6 +1171,7 @@ impl Default for Config {
             connection_pool: ConnectionPoolConfig::default(),
             security: SecurityConfig::default(),
             observability: ObservabilityConfig::default(),
+            edge: EdgeConfig::default(),
         }
     }
 }
