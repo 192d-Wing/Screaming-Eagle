@@ -377,6 +377,343 @@ fn cidr_contains(cidr: &str, ip: IpAddr) -> bool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SNI Resolver for rustls
+// ---------------------------------------------------------------------------
+
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
+use rustls_pki_types::CertificateDer;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::fs::File;
+use std::io::BufReader;
+use std::sync::Arc;
+
+/// A rustls SNI resolver backed by our certificate configuration.
+pub struct SniResolver {
+    /// Exact hostname -> CertifiedKey
+    exact: HashMap<String, Arc<CertifiedKey>>,
+    /// Wildcard suffix (without `*.`) -> CertifiedKey
+    wildcards: Vec<(String, Arc<CertifiedKey>)>,
+    /// Default fallback
+    default: Option<Arc<CertifiedKey>>,
+}
+
+impl Debug for SniResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SniResolver")
+            .field("exact_count", &self.exact.len())
+            .field("wildcard_count", &self.wildcards.len())
+            .field("has_default", &self.default.is_some())
+            .finish()
+    }
+}
+
+impl SniResolver {
+    /// Build from a list of SNI certificate configurations.
+    pub fn new(certs: &[SniCertificate]) -> Result<Self, SniError> {
+        let mut exact = HashMap::new();
+        let mut wildcards = Vec::new();
+        let mut default = None;
+
+        for cert_cfg in certs {
+            let certified_key = load_certified_key(&cert_cfg.cert_path, &cert_cfg.key_path)?;
+            let key = Arc::new(certified_key);
+
+            if cert_cfg.hostname == "default" {
+                default = Some(key);
+            } else if let Some(suffix) = cert_cfg.hostname.strip_prefix("*.") {
+                wildcards.push((suffix.to_ascii_lowercase(), key));
+            } else {
+                exact.insert(cert_cfg.hostname.to_ascii_lowercase(), key);
+            }
+        }
+
+        Ok(Self {
+            exact,
+            wildcards,
+            default,
+        })
+    }
+
+    fn resolve_impl(&self, sni: Option<&str>) -> Option<Arc<CertifiedKey>> {
+        let host = match sni {
+            Some(s) if !s.is_empty() => s.to_ascii_lowercase(),
+            _ => return self.default.clone(),
+        };
+
+        // Exact match
+        if let Some(k) = self.exact.get(&host) {
+            return Some(k.clone());
+        }
+
+        // Wildcard match
+        for (suffix, key) in &self.wildcards {
+            if host_matches_wildcard(&host, suffix) {
+                return Some(key.clone());
+            }
+        }
+
+        self.default.clone()
+    }
+}
+
+impl ResolvesServerCert for SniResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        self.resolve_impl(client_hello.server_name())
+    }
+}
+
+/// Errors loading SNI certificates.
+#[derive(Debug, thiserror::Error)]
+pub enum SniError {
+    #[error("failed to read cert file: {0}")]
+    CertRead(#[from] std::io::Error),
+    #[error("no certificates found in PEM file")]
+    NoCerts,
+    #[error("no private key found in PEM file")]
+    NoKey,
+    #[error("unsupported private key type")]
+    UnsupportedKeyType,
+    #[error("failed to create signing key: {0}")]
+    SigningKey(String),
+}
+
+fn load_certified_key(cert_path: &str, key_path: &str) -> Result<CertifiedKey, SniError> {
+    // Load certificate chain
+    let cert_file = File::open(cert_path)?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+        .filter_map(|r| r.ok())
+        .collect();
+    if certs.is_empty() {
+        return Err(SniError::NoCerts);
+    }
+
+    // Load private key
+    let key_file = File::open(key_path)?;
+    let mut key_reader = BufReader::new(key_file);
+    let key = rustls_pemfile::private_key(&mut key_reader)?
+        .ok_or(SniError::NoKey)?;
+
+    // Create signing key
+    let signing_key = rustls::crypto::ring::sign::any_supported_type(&key)
+        .map_err(|e| SniError::SigningKey(format!("{:?}", e)))?;
+
+    Ok(CertifiedKey::new(certs, signing_key))
+}
+
+/// Build a rustls ServerConfig with SNI resolution.
+pub fn build_rustls_config(sni_certs: &[SniCertificate]) -> Result<rustls::ServerConfig, SniError> {
+    let resolver = SniResolver::new(sni_certs)?;
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(resolver));
+    Ok(config)
+}
+
+/// Build a rustls ServerConfig from a single cert/key pair (non-SNI).
+pub fn build_rustls_config_single(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<rustls::ServerConfig, SniError> {
+    // Load certificate chain
+    let cert_file = File::open(cert_path)?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+        .filter_map(|r| r.ok())
+        .collect();
+    if certs.is_empty() {
+        return Err(SniError::NoCerts);
+    }
+
+    // Load private key
+    let key_file = File::open(key_path)?;
+    let mut key_reader = BufReader::new(key_file);
+    let key = rustls_pemfile::private_key(&mut key_reader)?
+        .ok_or(SniError::NoKey)?;
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| SniError::SigningKey(format!("{:?}", e)))?;
+    Ok(config)
+}
+
+// ---------------------------------------------------------------------------
+// PROXY protocol v2 aware accept layer
+// ---------------------------------------------------------------------------
+
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+/// A wrapper around an async stream that has already consumed the PROXY v2
+/// header and exposes the real client address.
+pub struct ProxyStream<S> {
+    inner: S,
+    client_addr: Option<SocketAddr>,
+    server_addr: Option<SocketAddr>,
+    /// Leftover bytes after the PROXY header that belong to the app protocol.
+    pending: Option<bytes::Bytes>,
+}
+
+impl<S> ProxyStream<S> {
+    pub fn new(
+        inner: S,
+        info: ProxyInfo,
+        leftover: Option<bytes::Bytes>,
+    ) -> Self {
+        Self {
+            inner,
+            client_addr: info.client,
+            server_addr: info.server,
+            pending: leftover,
+        }
+    }
+
+    pub fn client_addr(&self) -> Option<SocketAddr> {
+        self.client_addr
+    }
+
+    #[allow(dead_code)]
+    pub fn server_addr(&self) -> Option<SocketAddr> {
+        self.server_addr
+    }
+
+    pub fn into_inner(self) -> S {
+        self.inner
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for ProxyStream<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        // Drain any leftover bytes first.
+        if let Some(ref mut pending) = self.pending {
+            let to_copy = pending.len().min(buf.remaining());
+            buf.put_slice(&pending[..to_copy]);
+            if to_copy == pending.len() {
+                self.pending = None;
+            } else {
+                *pending = pending.slice(to_copy..);
+            }
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for ProxyStream<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// Accept a connection with PROXY v2 header parsing.
+///
+/// Returns the stream wrapped with client info, or the raw stream if PROXY
+/// parsing fails or is disabled.
+pub async fn accept_proxy_v2<S: AsyncRead + Unpin>(
+    mut stream: S,
+    enabled: bool,
+    trusted: &[String],
+    peer_addr: SocketAddr,
+) -> std::io::Result<ProxyStream<S>> {
+    if !enabled || !is_trusted_proxy(peer_addr.ip(), trusted) {
+        // Pass through without parsing.
+        return Ok(ProxyStream::new(
+            stream,
+            ProxyInfo {
+                client: Some(peer_addr),
+                server: None,
+            },
+            None,
+        ));
+    }
+
+    // Read up to 232 bytes (max PROXY v2 header size).
+    let mut buf = vec![0u8; 232];
+    let mut filled = 0;
+
+    // Peek the signature first (need at least 16 bytes for header).
+    while filled < 16 {
+        let n = stream.read(&mut buf[filled..]).await?;
+        if n == 0 {
+            // Connection closed before we got a full header.
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "connection closed before PROXY header",
+            ));
+        }
+        filled += n;
+    }
+
+    // Check if it starts with PROXY v2 signature.
+    if &buf[..12] != PP2_SIGNATURE {
+        // Not a PROXY header - treat entire buffer as leftover app data.
+        return Ok(ProxyStream::new(
+            stream,
+            ProxyInfo {
+                client: Some(peer_addr),
+                server: None,
+            },
+            Some(bytes::Bytes::copy_from_slice(&buf[..filled])),
+        ));
+    }
+
+    // Parse header to get total length.
+    let length = u16::from_be_bytes([buf[14], buf[15]]) as usize;
+    let total = 16 + length;
+
+    // Read remaining header bytes if needed.
+    while filled < total && filled < buf.len() {
+        let n = stream.read(&mut buf[filled..]).await?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "connection closed mid PROXY header",
+            ));
+        }
+        filled += n;
+    }
+
+    match parse_proxy_v2(&buf[..filled]) {
+        Ok(Some((consumed, info))) => {
+            let leftover = if consumed < filled {
+                Some(bytes::Bytes::copy_from_slice(&buf[consumed..filled]))
+            } else {
+                None
+            };
+            Ok(ProxyStream::new(stream, info, leftover))
+        }
+        Ok(None) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "incomplete PROXY v2 header",
+        )),
+        Err(e) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("PROXY v2 parse error: {}", e),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

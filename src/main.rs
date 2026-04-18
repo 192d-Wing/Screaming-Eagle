@@ -32,7 +32,10 @@ use screaming_eagle::metrics::Metrics;
 use screaming_eagle::origin::OriginFetcher;
 use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter};
 use screaming_eagle::content::{ContentProcessor, content_processing_middleware};
-use screaming_eagle::network::{BindMode, build_listener};
+use screaming_eagle::http3::{Http3Request, Http3Response, run_http3_server};
+use screaming_eagle::network::{
+    BindMode, build_listener, build_rustls_config, build_rustls_config_single,
+};
 use screaming_eagle::protocol::{
     Http3Config, SseConfig, WebSocketConfig, alt_svc_middleware, sse_middleware,
     websocket_proxy_handler,
@@ -213,7 +216,48 @@ async fn main() -> anyhow::Result<()> {
     if let Some(ref tls_config) = config.tls {
         info!("TLS enabled, loading certificates");
         let addr: SocketAddr = config.server_addr().parse()?;
-        start_tls_server(addr, app, tls_config, health_shutdown_tx).await?;
+
+        // Build rustls config - use SNI resolver if multi-cert is configured
+        let rustls_cfg = if config.network.sni.enabled && !config.network.sni.certificates.is_empty()
+        {
+            info!(
+                "Multi-cert SNI enabled with {} certificates",
+                config.network.sni.certificates.len()
+            );
+            build_rustls_config(&config.network.sni.certificates)?
+        } else {
+            build_rustls_config_single(&tls_config.cert_path, &tls_config.key_path)?
+        };
+
+        // Clone rustls config for HTTP/3 if enabled
+        let http3_rustls_cfg = if config.protocol.http3.enabled {
+            Some(rustls_cfg.clone())
+        } else {
+            None
+        };
+
+        // Start HTTP/3 server if enabled
+        let http3_shutdown_rx = health_shutdown_tx.subscribe();
+        if let Some(h3_cfg) = http3_rustls_cfg {
+            let h3_port = config.protocol.http3.port;
+            let h3_addr = SocketAddr::new(addr.ip(), h3_port);
+            let h3_config = config.protocol.http3.clone();
+
+            info!("Starting HTTP/3 server on {}", h3_addr);
+            tokio::spawn(async move {
+                // Simple handler that returns 200 OK for now
+                // In a full implementation, this would route to the same handlers
+                let handler = |_req: Http3Request| async move {
+                    Http3Response::default()
+                };
+
+                if let Err(e) = run_http3_server(h3_addr, h3_cfg, h3_config, http3_shutdown_rx, handler).await {
+                    tracing::error!(error = %e, "HTTP/3 server error");
+                }
+            });
+        }
+
+        start_tls_server(addr, app, rustls_cfg, health_shutdown_tx).await?;
     } else {
         let listener = build_listener(&config.server.host, config.server.port, bind_mode).await?;
         let local = listener.local_addr()?;
@@ -233,13 +277,12 @@ async fn main() -> anyhow::Result<()> {
 async fn start_tls_server(
     addr: SocketAddr,
     app: Router,
-    tls_config: &config::TlsConfig,
+    rustls_cfg: rustls::ServerConfig,
     health_shutdown_tx: tokio::sync::watch::Sender<bool>,
 ) -> anyhow::Result<()> {
     use axum_server::tls_rustls::RustlsConfig;
 
-    let rustls_config =
-        RustlsConfig::from_pem_file(&tls_config.cert_path, &tls_config.key_path).await?;
+    let rustls_config = RustlsConfig::from_config(Arc::new(rustls_cfg));
 
     info!("Listening on https://{}", addr);
 

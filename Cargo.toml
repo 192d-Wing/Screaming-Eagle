@@ -86,6 +86,17 @@ num_cpus = "1.16"
 
 # TLS support
 axum-server = { version = "0.8", features = ["tls-rustls"] }
+rustls = "0.23"
+rustls-pemfile = "2"
+rustls-pki-types = "1"
+
+# HTTP/3 QUIC transport
+quinn = "0.11"
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+
+# HTTP types
+http = "1"
 
 # WebSocket client for proxying
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }

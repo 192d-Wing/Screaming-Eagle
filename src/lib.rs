@@ -11,6 +11,7 @@ pub mod error;
 pub mod error_pages;
 pub mod handlers;
 pub mod health;
+pub mod http3;
 pub mod metrics;
 pub mod network;
 pub mod observability;
