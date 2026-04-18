@@ -48,6 +48,15 @@ pub struct Config {
 
     #[serde(default)]
     pub edge: EdgeConfig,
+
+    #[serde(default)]
+    pub content: crate::content::ContentConfig,
+
+    #[serde(default)]
+    pub protocol: crate::protocol::ProtocolConfig,
+
+    #[serde(default)]
+    pub network: crate::network::NetworkConfig,
 }
 
 /// Edge logic configuration
@@ -1187,6 +1196,9 @@ impl Default for Config {
             security: SecurityConfig::default(),
             observability: ObservabilityConfig::default(),
             edge: EdgeConfig::default(),
+            content: crate::content::ContentConfig::default(),
+            protocol: crate::protocol::ProtocolConfig::default(),
+            network: crate::network::NetworkConfig::default(),
         }
     }
 }

@@ -31,6 +31,12 @@ use screaming_eagle::health::{HealthChecker, spawn_health_checks};
 use screaming_eagle::metrics::Metrics;
 use screaming_eagle::origin::OriginFetcher;
 use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter};
+use screaming_eagle::content::{ContentProcessor, content_processing_middleware};
+use screaming_eagle::network::{BindMode, build_listener};
+use screaming_eagle::protocol::{
+    Http3Config, SseConfig, WebSocketConfig, alt_svc_middleware, sse_middleware,
+    websocket_proxy_handler,
+};
 use screaming_eagle::security::{
     Security, ip_access_control_middleware, request_signing_middleware, security_headers_middleware,
 };
@@ -155,6 +161,32 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Initialize content processor
+    let content_processor = Arc::new(ContentProcessor::new(config.content.clone()));
+    if config.content.enabled {
+        info!(
+            "Content processing enabled (compression={}, minify={}, image={})",
+            config.content.compression.enabled,
+            config.content.minification.enabled,
+            config.content.image.enabled
+        );
+    }
+
+    // Protocol configuration Arcs
+    let http3_cfg = Arc::new(config.protocol.http3.clone());
+    let sse_cfg = Arc::new(config.protocol.sse.clone());
+    let ws_cfg = Arc::new(config.protocol.websocket.clone());
+
+    if config.protocol.websocket.enabled {
+        info!("WebSocket proxy enabled");
+    }
+    if config.protocol.http3.enabled {
+        info!(
+            "HTTP/3 Alt-Svc advertisement enabled on port {}",
+            config.protocol.http3.port
+        );
+    }
+
     // Build router
     let app = build_router(
         state,
@@ -162,18 +194,30 @@ async fn main() -> anyhow::Result<()> {
         security,
         edge_processor,
         config.edge.enabled,
+        content_processor,
+        config.content.enabled,
+        ws_cfg,
+        sse_cfg,
+        http3_cfg,
     );
 
-    // Start server
-    let addr: SocketAddr = config.server_addr().parse()?;
+    // Resolve bind address according to network policy.
+    let bind_mode = config.network.bind_mode;
+    match bind_mode {
+        BindMode::V4Only => info!("Network bind mode: IPv4 only"),
+        BindMode::V6Only => info!("Network bind mode: IPv6 only"),
+        BindMode::Dual => info!("Network bind mode: dual-stack"),
+    }
 
     // Check for TLS configuration
     if let Some(ref tls_config) = config.tls {
         info!("TLS enabled, loading certificates");
+        let addr: SocketAddr = config.server_addr().parse()?;
         start_tls_server(addr, app, tls_config, health_shutdown_tx).await?;
     } else {
-        info!("Listening on http://{}", addr);
-        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let listener = build_listener(&config.server.host, config.server.port, bind_mode).await?;
+        let local = listener.local_addr()?;
+        info!("Listening on http://{}", local);
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -254,6 +298,11 @@ fn build_router(
     security: Arc<Security>,
     edge_processor: Arc<EdgeProcessor>,
     edge_enabled: bool,
+    content_processor: Arc<ContentProcessor>,
+    content_enabled: bool,
+    ws_cfg: Arc<WebSocketConfig>,
+    sse_cfg: Arc<SseConfig>,
+    http3_cfg: Arc<Http3Config>,
 ) -> Router {
     // Public API routes (no auth required)
     let public_api_routes = Router::new()
@@ -286,10 +335,23 @@ fn build_router(
             get(handlers::root_cdn_handler).head(handlers::root_cdn_handler),
         );
 
+    // WebSocket proxy route (separate, does not go through HTTP middlewares
+    // that would buffer or rewrite the upgrade).
+    let ws_routes = if ws_cfg.enabled {
+        Router::new()
+            .route(
+                "/_ws/{origin}/{*path}",
+                get(websocket_proxy_handler).with_state(ws_cfg.clone()),
+            )
+    } else {
+        Router::new()
+    };
+
     // Build router with middleware layers
     let mut router = Router::new()
         .nest("/_cdn", api_routes)
         .merge(cdn_routes)
+        .merge(ws_routes)
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
@@ -321,6 +383,25 @@ fn build_router(
             edge_processor,
             edge_processing_middleware,
         ));
+    }
+
+    // Add content processing middleware if enabled
+    if content_enabled {
+        router = router.layer(middleware::from_fn_with_state(
+            content_processor,
+            content_processing_middleware,
+        ));
+    }
+
+    // SSE headers fix-up runs after content processing so it can strip
+    // compression hints that would break streaming.
+    if sse_cfg.enabled {
+        router = router.layer(middleware::from_fn_with_state(sse_cfg, sse_middleware));
+    }
+
+    // Alt-Svc advertising layer (HTTP/3 hint)
+    if http3_cfg.enabled && http3_cfg.advertise_alt_svc {
+        router = router.layer(middleware::from_fn_with_state(http3_cfg, alt_svc_middleware));
     }
 
     router.with_state(state)
