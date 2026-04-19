@@ -22,12 +22,14 @@ use crate::cache::{
 use crate::circuit_breaker::{CircuitBreakerManager, CircuitState};
 use crate::coalesce::{AcquireResult, CoalesceStats, CoalescedResponse, RequestCoalescer};
 use crate::config::Config;
+use crate::degradation::{DegradationManager, DegradationStatus};
 use crate::error::{CdnError, CdnResult};
 use crate::health::{HealthChecker, OriginHealth};
 use crate::metrics::Metrics;
 use crate::origin::OriginFetcher;
 use crate::range::{ByteRange, RangeParseResult, extract_range, parse_range_header};
 use crate::rate_limit::{RateLimitResult, RateLimiter};
+use crate::shadow::{ShadowManager, ShadowStatsSnapshot};
 
 pub struct AppState {
     pub cache: Arc<Cache>,
@@ -39,6 +41,8 @@ pub struct AppState {
     pub health_checker: Arc<HealthChecker>,
     pub coalescer: Arc<RequestCoalescer>,
     pub coalesce_enabled: bool,
+    pub degradation: Arc<DegradationManager>,
+    pub shadow: Arc<ShadowManager>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +97,19 @@ pub struct CoalesceStatsResponse {
     pub enabled: bool,
     #[serde(flatten)]
     pub stats: CoalesceStats,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DegradationStatusResponse {
+    #[serde(flatten)]
+    pub status: DegradationStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ShadowStatsResponse {
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub stats: ShadowStatsSnapshot,
 }
 
 #[derive(Debug, Deserialize)]
@@ -207,6 +224,23 @@ pub async fn coalesce_stats(State(state): State<Arc<AppState>>) -> Json<Coalesce
     Json(CoalesceStatsResponse {
         enabled: state.coalesce_enabled,
         stats: state.coalescer.stats(),
+    })
+}
+
+// Degradation status endpoint
+pub async fn degradation_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<DegradationStatusResponse> {
+    Json(DegradationStatusResponse {
+        status: state.degradation.status(),
+    })
+}
+
+// Shadow statistics endpoint
+pub async fn shadow_stats(State(state): State<Arc<AppState>>) -> Json<ShadowStatsResponse> {
+    Json(ShadowStatsResponse {
+        enabled: state.shadow.is_enabled(),
+        stats: state.shadow.stats(),
     })
 }
 

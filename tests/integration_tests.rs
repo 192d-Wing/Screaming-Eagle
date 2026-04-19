@@ -242,3 +242,272 @@ fn test_cache_key_generation() {
         "origin1/path"
     );
 }
+
+/// Test degradation manager fallback handling
+#[test]
+fn test_degradation_fallbacks() {
+    use screaming_eagle::degradation::{DegradationConfig, DegradationManager, FallbackRule};
+    use std::collections::HashMap;
+
+    let config = DegradationConfig {
+        enabled: true,
+        serve_stale_on_error: true,
+        max_stale_age_secs: 3600,
+        fallbacks: vec![
+            FallbackRule {
+                path_prefix: "/api/".to_string(),
+                status: 503,
+                body: r#"{"error":"service unavailable"}"#.to_string(),
+                content_type: "application/json".to_string(),
+                headers: HashMap::new(),
+            },
+            FallbackRule {
+                path_prefix: "/static/".to_string(),
+                status: 200,
+                body: "Fallback content".to_string(),
+                content_type: "text/plain".to_string(),
+                headers: HashMap::new(),
+            },
+        ],
+        backup_origins: HashMap::new(),
+        reduced_mode_threshold: 5,
+        reduced_mode_recovery_secs: 60,
+    };
+
+    let manager = DegradationManager::new(config);
+
+    // Test fallback matching
+    let api_fallback = manager.find_fallback("/api/users");
+    assert!(api_fallback.is_some());
+    let fb = api_fallback.unwrap();
+    assert_eq!(fb.status.as_u16(), 503);
+
+    let static_fallback = manager.find_fallback("/static/image.png");
+    assert!(static_fallback.is_some());
+    let fb = static_fallback.unwrap();
+    assert_eq!(fb.status.as_u16(), 200);
+
+    // No fallback for unmatched paths
+    assert!(manager.find_fallback("/other/path").is_none());
+}
+
+/// Test degradation reduced mode
+#[test]
+fn test_degradation_reduced_mode() {
+    use screaming_eagle::degradation::{DegradationConfig, DegradationManager};
+
+    let config = DegradationConfig {
+        enabled: true,
+        reduced_mode_threshold: 3,
+        ..Default::default()
+    };
+
+    let manager = DegradationManager::new(config);
+
+    // Initially not in reduced mode
+    assert!(!manager.is_reduced_mode("test-origin"));
+
+    // Record failures
+    manager.record_failure("test-origin");
+    manager.record_failure("test-origin");
+    assert!(!manager.is_reduced_mode("test-origin"));
+
+    manager.record_failure("test-origin");
+    assert!(manager.is_reduced_mode("test-origin"));
+
+    // Success resets failure count but doesn't immediately exit reduced mode
+    manager.record_success("test-origin");
+    let status = manager.status();
+    assert_eq!(status.origins.get("test-origin").unwrap().failures, 0);
+}
+
+/// Test consistent hash ring distribution
+#[tokio::test]
+async fn test_hash_ring_distribution() {
+    use screaming_eagle::distributed::HashRing;
+    use std::collections::HashMap;
+
+    let ring = HashRing::new(100); // 100 virtual nodes per physical node
+
+    ring.add_node("node-a").await;
+    ring.add_node("node-b").await;
+    ring.add_node("node-c").await;
+
+    assert_eq!(ring.node_count().await, 3);
+
+    // Test distribution across many keys
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for i in 0..3000 {
+        let key = format!("cache-key-{}", i);
+        if let Some(node) = ring.get_node(&key).await {
+            *counts.entry(node).or_insert(0) += 1;
+        }
+    }
+
+    // Each node should get roughly 1000 keys (1/3 of 3000)
+    // Allow 30% variance for randomness
+    for (node, count) in &counts {
+        assert!(
+            *count >= 700 && *count <= 1300,
+            "Node {} has {} keys, expected ~1000",
+            node,
+            count
+        );
+    }
+}
+
+/// Test hash ring consistency after node removal
+#[tokio::test]
+async fn test_hash_ring_consistency() {
+    use screaming_eagle::distributed::HashRing;
+
+    let ring = HashRing::new(100);
+
+    ring.add_node("node-a").await;
+    ring.add_node("node-b").await;
+    ring.add_node("node-c").await;
+
+    // Record initial assignments
+    let mut initial_assignments: Vec<(String, String)> = Vec::new();
+    for i in 0..100 {
+        let key = format!("key-{}", i);
+        if let Some(node) = ring.get_node(&key).await {
+            initial_assignments.push((key, node));
+        }
+    }
+
+    // Remove one node
+    ring.remove_node("node-b").await;
+    assert_eq!(ring.node_count().await, 2);
+
+    // Keys that were on node-a or node-c should stay there
+    let mut moved_count = 0;
+    for (key, original_node) in &initial_assignments {
+        if *original_node != "node-b" {
+            if let Some(new_node) = ring.get_node(key).await {
+                if new_node != *original_node {
+                    moved_count += 1;
+                }
+            }
+        }
+    }
+
+    // Very few keys should have moved (consistent hashing property)
+    // Only keys from node-b should redistribute
+    assert!(moved_count < 5, "Too many keys moved: {}", moved_count);
+}
+
+/// Test distributed invalidation deduplication
+#[tokio::test]
+async fn test_invalidation_deduplication() {
+    use screaming_eagle::distributed::{Invalidation, InvalidationManager};
+
+    let (manager, _rx) = InvalidationManager::new("node-1".to_string());
+
+    // Create an invalidation
+    let msg = manager.invalidate(Invalidation::Key("/api/users".to_string())).await;
+
+    // Same message should be deduplicated
+    let accepted = manager.receive(msg.clone()).await;
+    assert!(!accepted, "Duplicate message should be rejected");
+
+    // Different message should be accepted
+    let msg2 = screaming_eagle::distributed::InvalidationMessage {
+        id: "node-2-1".to_string(),
+        origin_node: "node-2".to_string(),
+        timestamp: 12345,
+        invalidation: Invalidation::Prefix("/api/".to_string()),
+    };
+    let accepted = manager.receive(msg2).await;
+    assert!(accepted, "New message should be accepted");
+}
+
+/// Test shadow manager rule matching
+#[test]
+fn test_shadow_rule_matching() {
+    use screaming_eagle::shadow::{ShadowConfig, ShadowManager, ShadowRule};
+    use std::collections::HashMap;
+
+    let config = ShadowConfig {
+        enabled: true,
+        rules: vec![
+            ShadowRule {
+                name: "api-shadow".to_string(),
+                primary_origin: "prod".to_string(),
+                shadow_url: "http://staging.example.com".to_string(),
+                sample_percent: 100,
+                include_paths: vec!["^/api/".to_string()],
+                exclude_paths: vec!["^/api/health".to_string()],
+                methods: vec!["GET".to_string(), "POST".to_string()],
+                forward_headers: vec!["authorization".to_string()],
+                add_headers: HashMap::new(),
+            },
+        ],
+        max_concurrent: 10,
+        timeout_secs: 5,
+        log_differences: false,
+    };
+
+    let manager = ShadowManager::new(config);
+    assert!(manager.is_enabled());
+
+    // Should match API paths
+    let rules = manager.find_rules("prod", "/api/users", &http::Method::GET);
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].name, "api-shadow");
+
+    // Should exclude health endpoint
+    let rules = manager.find_rules("prod", "/api/health", &http::Method::GET);
+    assert!(rules.is_empty());
+
+    // Should not match different origin
+    let rules = manager.find_rules("staging", "/api/users", &http::Method::GET);
+    assert!(rules.is_empty());
+
+    // Should not match different method
+    let rules = manager.find_rules("prod", "/api/users", &http::Method::DELETE);
+    assert!(rules.is_empty());
+}
+
+/// Test rate limiter config update (hot-reload)
+#[test]
+fn test_rate_limiter_hot_reload() {
+    use screaming_eagle::rate_limit::{RateLimitConfig, RateLimitResult, RateLimiter};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    let config = RateLimitConfig {
+        requests_per_window: 5,
+        window_secs: 60,
+        burst_size: 2,
+        enabled: true,
+    };
+
+    let limiter = RateLimiter::new(config);
+    let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+
+    // Use up initial tokens (5 + 2 = 7)
+    for _ in 0..7 {
+        match limiter.check(ip) {
+            RateLimitResult::Allowed { .. } => {}
+            RateLimitResult::Limited { .. } => panic!("Should be allowed"),
+        }
+    }
+
+    // Should be limited now
+    match limiter.check(ip) {
+        RateLimitResult::Allowed { .. } => panic!("Should be limited"),
+        RateLimitResult::Limited { .. } => {}
+    }
+
+    // Hot-reload with higher limits
+    limiter.update_config(100, 60, 50);
+
+    // New client should get higher limits
+    let ip2 = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+    for _ in 0..150 {
+        match limiter.check(ip2) {
+            RateLimitResult::Allowed { .. } => {}
+            RateLimitResult::Limited { .. } => panic!("Should be allowed with new config"),
+        }
+    }
+}

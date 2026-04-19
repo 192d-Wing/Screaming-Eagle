@@ -1,7 +1,8 @@
 use dashmap::DashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct RateLimitConfig {
@@ -70,27 +71,50 @@ impl TokenBucket {
 
 pub struct RateLimiter {
     buckets: DashMap<IpAddr, TokenBucket>,
-    config: RateLimitConfig,
+    requests_per_window: AtomicU32,
+    window_secs: AtomicU64,
+    burst_size: AtomicU32,
+    enabled: AtomicBool,
 }
 
 impl RateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
             buckets: DashMap::new(),
-            config,
+            requests_per_window: AtomicU32::new(config.requests_per_window),
+            window_secs: AtomicU64::new(config.window_secs),
+            burst_size: AtomicU32::new(config.burst_size),
+            enabled: AtomicBool::new(config.enabled),
         }
     }
 
+    /// Update configuration at runtime (for hot-reload)
+    pub fn update_config(&self, requests_per_window: u32, window_secs: u64, burst_size: u32) {
+        self.requests_per_window.store(requests_per_window, Ordering::SeqCst);
+        self.window_secs.store(window_secs, Ordering::SeqCst);
+        self.burst_size.store(burst_size, Ordering::SeqCst);
+        info!(
+            requests_per_window,
+            window_secs,
+            burst_size,
+            "Rate limiter config updated"
+        );
+    }
+
     pub fn check(&self, ip: IpAddr) -> RateLimitResult {
-        if !self.config.enabled {
+        if !self.enabled.load(Ordering::Relaxed) {
             return RateLimitResult::Allowed {
                 remaining: u32::MAX,
                 reset_secs: 0,
             };
         }
 
-        let max_tokens = self.config.requests_per_window as f64 + self.config.burst_size as f64;
-        let refill_rate = self.config.requests_per_window as f64 / self.config.window_secs as f64;
+        let requests_per_window = self.requests_per_window.load(Ordering::Relaxed);
+        let window_secs = self.window_secs.load(Ordering::Relaxed);
+        let burst_size = self.burst_size.load(Ordering::Relaxed);
+
+        let max_tokens = requests_per_window as f64 + burst_size as f64;
+        let refill_rate = requests_per_window as f64 / window_secs as f64;
 
         let mut bucket = self
             .buckets

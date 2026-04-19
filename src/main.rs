@@ -20,17 +20,23 @@ use screaming_eagle::cache::Cache;
 use screaming_eagle::circuit_breaker::{self, CircuitBreakerManager};
 use screaming_eagle::coalesce::RequestCoalescer;
 use screaming_eagle::config::{self, Config};
+use screaming_eagle::degradation::DegradationManager;
+// Distributed features available: GossipCluster, HashRing, InvalidationManager
+// Enable via config.distributed.enabled = true
 use screaming_eagle::edge::{EdgeProcessor, edge_processing_middleware};
 use screaming_eagle::error::init_error_pages;
 use screaming_eagle::error_pages::ErrorPages;
 use screaming_eagle::handlers::{
-    self, AppState, cache_stats, cdn_handler, circuit_breaker_status, coalesce_stats, health,
-    metrics as metrics_handler, origin_health_status, purge_cache, warm_cache,
+    self, AppState, cache_stats, cdn_handler, circuit_breaker_status, coalesce_stats,
+    degradation_status, health, metrics as metrics_handler, origin_health_status, purge_cache,
+    shadow_stats, warm_cache,
 };
 use screaming_eagle::health::{HealthChecker, spawn_health_checks};
+use screaming_eagle::hotreload::{HotReloader, ReloadEvent};
 use screaming_eagle::metrics::Metrics;
 use screaming_eagle::origin::OriginFetcher;
 use screaming_eagle::rate_limit::{RateLimitConfig, RateLimiter};
+use screaming_eagle::shadow::ShadowManager;
 use screaming_eagle::content::{ContentProcessor, content_processing_middleware};
 use screaming_eagle::http3::{Http3Request, Http3Response, run_http3_server};
 use screaming_eagle::network::{
@@ -100,6 +106,25 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Initialize degradation manager
+    let degradation_manager = Arc::new(DegradationManager::new(config.degradation.clone()));
+    if config.degradation.enabled {
+        info!(
+            "Graceful degradation enabled ({} fallback rules, {} backup origins)",
+            config.degradation.fallbacks.len(),
+            config.degradation.backup_origins.len()
+        );
+    }
+
+    // Initialize shadow manager
+    let shadow_manager = Arc::new(ShadowManager::new(config.shadow.clone()));
+    if config.shadow.enabled {
+        info!(
+            "Traffic shadowing enabled ({} rules)",
+            config.shadow.rules.len()
+        );
+    }
+
     let state = Arc::new(AppState {
         cache: cache.clone(),
         origin,
@@ -110,6 +135,8 @@ async fn main() -> anyhow::Result<()> {
         health_checker: health_checker.clone(),
         coalescer,
         coalesce_enabled: config.coalesce.enabled,
+        degradation: degradation_manager.clone(),
+        shadow: shadow_manager.clone(),
     });
 
     // Start background cache cleanup task
@@ -134,7 +161,50 @@ async fn main() -> anyhow::Result<()> {
 
     // Start origin health check tasks
     let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::watch::channel(false);
-    spawn_health_checks(health_checker.clone(), health_shutdown_rx);
+    spawn_health_checks(health_checker.clone(), health_shutdown_rx.clone());
+
+    // Start config hot-reload watcher if config file exists
+    let config_path = std::env::var("CDN_CONFIG").unwrap_or_else(|_| "config/cdn.toml".to_string());
+    if std::path::Path::new(&config_path).exists() {
+        let (hot_reloader, mut reload_rx) = HotReloader::new(
+            &config_path,
+            &config,
+            health_shutdown_rx.clone(),
+        );
+
+        // Clone managers that can be updated on reload
+        let rl_clone = rate_limiter.clone();
+
+        // Spawn reload event handler
+        tokio::spawn(async move {
+            while let Ok(event) = reload_rx.recv().await {
+                match event {
+                    ReloadEvent::Full(new_config) => {
+                        info!("Configuration reloaded, updating components");
+                        // Update rate limiter config
+                        rl_clone.update_config(
+                            new_config.rate_limit.requests_per_window,
+                            new_config.rate_limit.window_secs,
+                            new_config.rate_limit.burst_size,
+                        );
+                        info!("Components updated with new configuration");
+                    }
+                    ReloadEvent::Failed(err) => {
+                        tracing::warn!(error = %err, "Configuration reload failed");
+                    }
+                }
+            }
+        });
+
+        // Start the file watcher
+        tokio::spawn(async move {
+            if let Err(e) = hot_reloader.watch().await {
+                tracing::error!(error = %e, "Hot-reload watcher failed");
+            }
+        });
+
+        info!("Configuration hot-reload enabled for {}", config_path);
+    }
 
     // Initialize admin authentication
     let admin_auth = Arc::new(AdminAuth::new(config.admin.clone()));
@@ -360,6 +430,8 @@ fn build_router(
         .route("/circuit-breakers", get(circuit_breaker_status))
         .route("/origins/health", get(origin_health_status))
         .route("/coalesce", get(coalesce_stats))
+        .route("/degradation", get(degradation_status))
+        .route("/shadow", get(shadow_stats))
         .route_layer(middleware::from_fn_with_state(
             admin_auth.clone(),
             admin_auth_middleware,
