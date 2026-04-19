@@ -57,6 +57,15 @@ pub struct Config {
 
     #[serde(default)]
     pub network: crate::network::NetworkConfig,
+
+    #[serde(default)]
+    pub degradation: crate::degradation::DegradationConfig,
+
+    #[serde(default)]
+    pub shadow: crate::shadow::ShadowConfig,
+
+    #[serde(default)]
+    pub distributed: crate::distributed::DistributedConfig,
 }
 
 /// Edge logic configuration
@@ -1199,6 +1208,9 @@ impl Default for Config {
             content: crate::content::ContentConfig::default(),
             protocol: crate::protocol::ProtocolConfig::default(),
             network: crate::network::NetworkConfig::default(),
+            degradation: crate::degradation::DegradationConfig::default(),
+            shadow: crate::shadow::ShadowConfig::default(),
+            distributed: crate::distributed::DistributedConfig::default(),
         }
     }
 }
